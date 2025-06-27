@@ -1,0 +1,207 @@
+import requests
+import time
+from datetime import datetime
+
+# Конфигурация (замените YOUR_API_KEY на реальный ключ!)
+API_KEY = "433019b64ac853fc53c1d38f63576c8b"
+CITY = "Moscow,RU"
+URL = f"http://api.openweathermap.org/data/2.5/weather?q={CITY}&appid={API_KEY}&units=metric&lang=ru"
+REFRESH_INTERVAL = 60  # Обновление каждые 60 секунд
+
+# ANSI цветовые коды
+COLORS = {
+    "RED": "\033[31m",
+    "GREEN": "\033[32m",
+    "YELLOW": "\033[33m",
+    "BLUE": "\033[34m",
+    "MAGENTA": "\033[35m",
+    "CYAN": "\033[36m",
+    "WHITE": "\033[37m",
+    "BOLD": "\033[1m",
+    "RESET": "\033[0m",
+}
+
+# ASCII арт для разных погодных условий
+WEATHER_ART = {
+    "clear": {
+        "color": COLORS["YELLOW"],
+        "art": [
+            "    \\   /    ",
+            "     .-.      ",
+            "  ― (   ) ―   ",
+            "     `-᾿      ",
+            "    /   \\    "
+        ]
+    },
+    "clouds": {
+        "color": COLORS["WHITE"],
+        "art": [
+            "     .--.     ",
+            "  .-(    ).   ",
+            " (___.))  ",
+            "              ",
+            "              "
+        ]
+    },
+    "rain": {
+        "color": COLORS["BLUE"],
+        "art": [
+            "     .--.     ",
+            "  .-(    ).   ",
+            " (___.))  ",
+            "  ‚‘‚‘‚‘‚‘   ",
+            "  ‚’‚’‚’‚’   "
+        ]
+    },
+    "snow": {
+        "color": COLORS["CYAN"],
+        "art": [
+            "     .--.     ",
+            "  .-(    ).   ",
+            " (___.))  ",
+            "  * * * * *   ",
+            "   * * * *    "
+        ]
+    },
+    "thunderstorm": {
+        "color": COLORS["MAGENTA"],
+        "art": [
+            "     .--.     ",
+            "  .-(    ).   ",
+            " (___.))  ",
+            "    /  /      ",
+            "   /  /       "
+        ]
+    },
+    "default": {
+        "color": COLORS["GREEN"],
+        "art": [
+            "   .~~~~.    ",
+            "   ;    ;    ",
+            "   .    .    ",
+            "    \\__/     ",
+            "             "
+        ]
+    }
+}
+
+def get_weather_art(condition):
+    """Возвращает ASCII арт и цвет для погодного условия"""
+    condition = condition.lower()
+    
+    if "clear" in condition:
+        return WEATHER_ART["clear"]
+    elif "cloud" in condition:
+        return WEATHER_ART["clouds"]
+    elif "rain" in condition:
+        return WEATHER_ART["rain"]
+    elif "snow" in condition:
+        return WEATHER_ART["snow"]
+    elif "thunder" in condition or "storm" in condition:
+        return WEATHER_ART["thunderstorm"]
+    else:
+        return WEATHER_ART["default"]
+
+def get_temp_color(temp):
+    """Возвращает цветовой код в зависимости от температуры"""
+    if temp < -10:
+        return COLORS["CYAN"] + COLORS["BOLD"]
+    elif temp < 0:
+        return COLORS["BLUE"]
+    elif temp < 10:
+        return COLORS["CYAN"]
+    elif temp < 20:
+        return COLORS["GREEN"]
+    elif temp < 30:
+        return COLORS["YELLOW"]
+    else:
+        return COLORS["RED"] + COLORS["BOLD"]
+
+def clear_screen():
+    """Очищает экран терминала"""
+    print("\033[H\033[J", end="")
+
+def get_weather():
+    """Получает и отображает текущую погоду"""
+    try:
+        # Отправка запроса
+        response = requests.get(URL)
+        data = response.json()
+        
+        # Проверка статуса
+        if response.status_code == 200:
+            # Извлечение данных
+            weather_desc = data['weather'][0]['description']
+            weather_main = data['weather'][0]['main']
+            temp = data['main']['temp']
+            feels_like = data['main']['feels_like']
+            humidity = data['main']['humidity']
+            pressure = data['main']['pressure']
+            wind_speed = data['wind']['speed']
+            
+            # Получаем арт и цвет для погоды
+            weather_art = get_weather_art(weather_main)
+            weather_color = weather_art["color"]
+            art_lines = weather_art["art"]
+            
+            # Цвета для температуры
+            temp_color = get_temp_color(temp)
+            feels_color = get_temp_color(feels_like)
+            reset = COLORS["RESET"]
+            
+            # Текущее время
+            now = datetime.now().strftime("%H:%M:%S")
+            
+            # Очистка экрана и вывод заголовка
+            clear_screen()
+            print(f"{COLORS['BOLD']}{COLORS['YELLOW']}╔═══════════════════════════════════════════════╗")
+            print(f"║      Погода в Москве (обновлено: {now})     ║")
+            print(f"╚═══════════════════════════════════════════════╝{reset}\n")
+            
+            # Выводим ASCII арт рядом с описанием погоды
+            print(f"{weather_color}{' ' * 10}{COLORS['BOLD']}Текущие условия{reset}")
+            print(f"{weather_color}{' ' * 10}────────────────{reset}\n")
+            
+            for i, line in enumerate(art_lines):
+                if i == 2:
+                    print(f"{weather_color}{line}{reset}  {weather_color}{COLORS['BOLD']}Состояние:{reset} {weather_desc.capitalize()}")
+                else:
+                    print(f"{weather_color}{line}{reset}")
+            
+            # Вывод температуры с цветовым кодированием
+            print(f"\n{COLORS['BOLD']}Температура:{reset}")
+            print(f"  Реальная:    {temp_color}{temp:.1f}°C{reset}")
+            print(f"  Ощущается:   {feels_color}{feels_like:.1f}°C{reset}")
+            
+            # Вывод дополнительных параметров
+            print(f"\n{COLORS['BOLD']}Другие параметры:{reset}")
+            print(f"  Влажность:   {COLORS['BLUE']}{humidity}%{reset}")
+            print(f"  Давление:    {COLORS['CYAN']}{pressure} hPa{reset}")
+            print(f"  Ветер:       {COLORS['WHITE']}{wind_speed} м/с{reset}")
+            
+            # Вывод разделителя
+            print(f"\n{weather_color}{'═' * 45}{reset}")
+            print(f"{COLORS['GREEN']}Следующее обновление через {REFRESH_INTERVAL} секунд...{reset}")
+            print(f"{COLORS['YELLOW']}Для выхода нажмите Ctrl+C{reset}")
+            
+        else:
+            print(f"{COLORS['RED']}Ошибка: {data.get('message', 'Неизвестная ошибка')}{COLORS['RESET']}")
+
+    except requests.exceptions.RequestException as e:
+        print(f"{COLORS['RED']}Ошибка соединения: {e}{COLORS['RESET']}")
+    except KeyError:
+        print(f"{COLORS['RED']}Ошибка обработки данных. Проверьте API-ключ.{COLORS['RESET']}")
+
+def main():
+    """Основной цикл программы"""
+    try:
+        while True:
+            get_weather()
+            # Ожидание до следующего обновления
+            time.sleep(REFRESH_INTERVAL)
+            
+    except KeyboardInterrupt:
+        print(f"\n{COLORS['GREEN']}Программа завершена. До свидания!{COLORS['RESET']}")
+
+if __name__ == "__main__":
+    main()
