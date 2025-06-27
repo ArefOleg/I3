@@ -2,7 +2,7 @@ import requests
 import time
 from datetime import datetime
 
-# Конфигурация (замените YOUR_API_KEY на реальный ключ!)
+# Конфигурация
 API_KEY = "433019b64ac853fc53c1d38f63576c8b"
 CITY = "Moscow,RU"
 URL = f"http://api.openweathermap.org/data/2.5/weather?q={CITY}&appid={API_KEY}&units=metric&lang=ru"
@@ -21,15 +21,13 @@ COLORS = {
     "RESET": "\033[0m",
 }
 
-# ASCII арт для разных погодных условий
+# Компактный ASCII арт
 WEATHER_ART = {
     "clear": {
         "color": COLORS["YELLOW"],
         "art": [
             "    \\   /    ",
-            "     .-.      ",
             "  ― (   ) ―   ",
-            "     `-᾿      ",
             "    /   \\    "
         ]
     },
@@ -38,9 +36,7 @@ WEATHER_ART = {
         "art": [
             "     .--.     ",
             "  .-(    ).   ",
-            " (___.))  ",
-            "              ",
-            "              "
+            "  (____).)    "
         ]
     },
     "rain": {
@@ -48,9 +44,7 @@ WEATHER_ART = {
         "art": [
             "     .--.     ",
             "  .-(    ).   ",
-            " (___.))  ",
-            "  ‚‘‚‘‚‘‚‘   ",
-            "  ‚’‚’‚’‚’   "
+            "  (____).) ~  "
         ]
     },
     "snow": {
@@ -58,9 +52,7 @@ WEATHER_ART = {
         "art": [
             "     .--.     ",
             "  .-(    ).   ",
-            " (___.))  ",
-            "  * * * * *   ",
-            "   * * * *    "
+            "  (____).) *  "
         ]
     },
     "thunderstorm": {
@@ -68,9 +60,7 @@ WEATHER_ART = {
         "art": [
             "     .--.     ",
             "  .-(    ).   ",
-            " (___.))  ",
-            "    /  /      ",
-            "   /  /       "
+            "  (____).)/\\  "
         ]
     },
     "default": {
@@ -78,9 +68,7 @@ WEATHER_ART = {
         "art": [
             "   .~~~~.    ",
             "   ;    ;    ",
-            "   .    .    ",
-            "    \\__/     ",
-            "             "
+            "    \\__/     "
         ]
     }
 }
@@ -154,35 +142,21 @@ def get_weather():
             
             # Очистка экрана и вывод заголовка
             clear_screen()
-            print(f"{COLORS['BOLD']}{COLORS['YELLOW']}╔═══════════════════════════════════════════════╗")
-            print(f"║      Погода в Москве (обновлено: {now})     ║")
-            print(f"╚═══════════════════════════════════════════════╝{reset}\n")
+            print(f"{COLORS['BOLD']}{COLORS['YELLOW']}Погода в Москве [{now}]{reset}\n")
             
-            # Выводим ASCII арт рядом с описанием погоды
-            print(f"{weather_color}{' ' * 10}{COLORS['BOLD']}Текущие условия{reset}")
-            print(f"{weather_color}{' ' * 10}────────────────{reset}\n")
+            # Выводим ASCII арт и основную информацию
+            print(f"{weather_color}{art_lines[0]}  {COLORS['BOLD']}Состояние:{reset} {weather_desc.capitalize()}")
+            print(f"{weather_color}{art_lines[1]}  {COLORS['BOLD']}Температура:{reset} {temp_color}{temp:.1f}°C{reset}")
+            print(f"{weather_color}{art_lines[2]}  {COLORS['BOLD']}Ощущается:{reset} {feels_color}{feels_like:.1f}°C{reset}")
             
-            for i, line in enumerate(art_lines):
-                if i == 2:
-                    print(f"{weather_color}{line}{reset}  {weather_color}{COLORS['BOLD']}Состояние:{reset} {weather_desc.capitalize()}")
-                else:
-                    print(f"{weather_color}{line}{reset}")
-            
-            # Вывод температуры с цветовым кодированием
-            print(f"\n{COLORS['BOLD']}Температура:{reset}")
-            print(f"  Реальная:    {temp_color}{temp:.1f}°C{reset}")
-            print(f"  Ощущается:   {feels_color}{feels_like:.1f}°C{reset}")
-            
-            # Вывод дополнительных параметров
-            print(f"\n{COLORS['BOLD']}Другие параметры:{reset}")
+            # Вывод параметров друг под другом
+            print(f"\n{COLORS['BOLD']}Дополнительные параметры:{reset}")
             print(f"  Влажность:   {COLORS['BLUE']}{humidity}%{reset}")
             print(f"  Давление:    {COLORS['CYAN']}{pressure} hPa{reset}")
             print(f"  Ветер:       {COLORS['WHITE']}{wind_speed} м/с{reset}")
             
-            # Вывод разделителя
-            print(f"\n{weather_color}{'═' * 45}{reset}")
-            print(f"{COLORS['GREEN']}Следующее обновление через {REFRESH_INTERVAL} секунд...{reset}")
-            print(f"{COLORS['YELLOW']}Для выхода нажмите Ctrl+C{reset}")
+            # Компактный футер
+            print(f"\n{COLORS['GREEN']}Обновление через {REFRESH_INTERVAL} сек {COLORS['YELLOW']}[Ctrl+C для выхода]{reset}")
             
         else:
             print(f"{COLORS['RED']}Ошибка: {data.get('message', 'Неизвестная ошибка')}{COLORS['RESET']}")
