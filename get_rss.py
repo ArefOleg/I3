@@ -107,10 +107,23 @@ def show_article(stdscr, article, feed_url, read_news):
     stdscr.clear()
     rows, cols = stdscr.getmaxyx()
     
-    # Отображение заголовка
+    # Отображение заголовка с переносом
     title = article.get('title', 'Без заголовка')
-    stdscr.addstr(0, 0, title, curses.A_BOLD)
-    stdscr.hline(1, 0, curses.ACS_HLINE, cols)
+    title_lines = textwrap.wrap(title, width=cols-1)
+    for i, line in enumerate(title_lines):
+        stdscr.addstr(i, 0, line, curses.A_BOLD)
+    
+    # Рассчитываем положение линии под заголовком
+    title_height = len(title_lines)
+    stdscr.hline(title_height, 0, curses.ACS_HLINE, cols)
+    
+    # Итерация 5: Добавляем пометку "ПРОЧИТАНО"
+    read_status = "ПРОЧИТАНО"
+    if title_lines:
+        # Размещаем статус в последней строке заголовка справа
+        last_line = title_lines[-1]
+        status_x = min(cols - len(read_status) - 1, len(last_line) + 2)
+        stdscr.addstr(title_height - 1, status_x, read_status, curses.A_REVERSE | curses.A_BOLD)
     
     # Получение и подготовка описания
     description = article.get('description', 'Нет описания')
@@ -132,30 +145,34 @@ def show_article(stdscr, article, feed_url, read_news):
             wrapped_lines.extend(wrapped)
             wrapped_lines.append("")
     
-    current_line = 2
+    current_line = title_height + 1  # Начинаем после заголовка и линии
     start_idx = 0
     
     while True:
         stdscr.clear()
         
-        # Отображение заголовка
-        stdscr.addstr(0, 0, title, curses.A_BOLD)
-        stdscr.hline(1, 0, curses.ACS_HLINE, cols)
+        # Снова отображаем заголовок (он статичен)
+        for i, line in enumerate(title_lines):
+            stdscr.addstr(i, 0, line, curses.A_BOLD)
+        stdscr.hline(title_height, 0, curses.ACS_HLINE, cols)
         
-        # Итерация 5: Добавляем пометку "ПРОЧИТАНО"
-        read_status = "ПРОЧИТАНО"
-        stdscr.addstr(0, cols - len(read_status) - 1, read_status, curses.A_REVERSE | curses.A_BOLD)
+        # Снова отображаем статус
+        if title_lines:
+            stdscr.addstr(title_height - 1, status_x, read_status, curses.A_REVERSE | curses.A_BOLD)
         
         # Отображение текста статьи
-        max_lines = rows - 3
+        max_lines = rows - (title_height + 2)  # Учитываем заголовок, линию и статусную строку
         for i in range(max_lines):
             idx = start_idx + i
             if idx >= len(wrapped_lines):
                 break
-            stdscr.addstr(2 + i, 0, wrapped_lines[idx])
+            stdscr.addstr(title_height + 1 + i, 0, wrapped_lines[idx])
         
         # Строка состояния
         status_line = f"↑↓ Прокрутка | Q: назад | {start_idx+1}-{min(start_idx+max_lines, len(wrapped_lines))}/{len(wrapped_lines)}"
+        # Обрезаем статусную строку если слишком длинная
+        if len(status_line) > cols:
+            status_line = status_line[:cols-4] + "..."
         stdscr.addstr(rows-1, 0, status_line, curses.A_REVERSE)
         
         stdscr.refresh()
@@ -226,50 +243,88 @@ def show_news(stdscr, feed, read_news):
         stdscr.addstr(0, 0, title, curses.A_BOLD)
         stdscr.addstr(1, 0, "Стрелки: навигация | Enter: читать | Q: назад", curses.A_DIM)
         
+        # Отображение списка новостей с переносом текста
         visible_items = min(rows - 4, len(news_items))
-        for idx in range(visible_items):
-            actual_idx = start_idx + idx
-            if actual_idx >= len(news_items):
-                break
-                
-            item = news_items[actual_idx]
-            line = f"[{item['time']}] {item['title']}"
-            if len(line) > cols - 1:
-                line = line[:cols-4] + "..."
-            
-            # Итерация 5: Определение стиля для прочитанных/непрочитанных
-            if actual_idx == current_selection:
-                attr = curses.A_REVERSE
-            else:
-                attr = curses.A_NORMAL
-                
-            if item['is_read']:
-                attr |= curses.A_DIM  # Итерация 5: Прочитанные - тусклый текст
-            
-            stdscr.addstr(idx + 3, 0, line, attr)
+        display_pos = 3  # Начинаем с этой строки
+        visible_count = 0
+        display_map = []  # Для сопоставления позиции экрана с индексом новости
         
-        if len(news_items) > visible_items:
-            scroll_info = f"↑↓ {start_idx+1}-{start_idx+visible_items} из {len(news_items)}"
-            stdscr.addstr(rows-1, cols-len(scroll_info)-1, scroll_info)
+        # Отображаем столько новостей, сколько помещается на экране
+        idx = start_idx
+        while visible_count < visible_items and idx < len(news_items):
+            item = news_items[idx]
+            prefix = f"[{item['time']}] "
+            text = item['title']
+            
+            # Разбиваем текст на строки с переносом
+            available_width = cols - len(prefix) - 1
+            if available_width < 5:  # Минимальная ширина для текста
+                available_width = 5
+                
+            wrapped_lines = textwrap.wrap(text, width=available_width)
+            if not wrapped_lines:
+                wrapped_lines = [""]
+            
+            # Проверяем, поместится ли новость на экран
+            required_lines = len(wrapped_lines)
+            if display_pos + required_lines > rows - 1:  # Оставляем место для статусной строки
+                break
+            
+            # Отображаем первую строку с временем
+            is_selected = (idx == current_selection)
+            attr = curses.A_REVERSE if is_selected else curses.A_NORMAL
+            if item['is_read']:
+                attr |= curses.A_DIM
+                
+            line = prefix + wrapped_lines[0]
+            if len(line) > cols - 1:
+                line = line[:cols-1]
+            stdscr.addstr(display_pos, 0, line, attr)
+            display_map.append(idx)  # Запоминаем индекс новости для этой позиции
+            display_pos += 1
+            
+            # Отображаем остальные строки с отступом
+            indent = ' ' * len(prefix)
+            for line_text in wrapped_lines[1:]:
+                line = indent + line_text
+                if len(line) > cols - 1:
+                    line = line[:cols-1]
+                    
+                stdscr.addstr(display_pos, 0, line, attr)
+                display_pos += 1
+            
+            visible_count += 1
+            idx += 1
+        
+        # Отображение информации о прокрутке
+        if start_idx + visible_count < len(news_items) or start_idx > 0:
+            scroll_info = f"↑↓ {start_idx+1}-{start_idx+visible_count} из {len(news_items)}"
+            if len(scroll_info) > cols:
+                scroll_info = scroll_info[:cols-4] + "..."
+            stdscr.addstr(rows-1, 0, scroll_info, curses.A_REVERSE)
         
         stdscr.refresh()
         
         key = stdscr.getch()
         
         if key == curses.KEY_UP:
-            current_selection = max(0, current_selection - 1)
-            if current_selection < start_idx:
-                start_idx = current_selection
+            if current_selection > 0:
+                current_selection -= 1
+                # Прокручиваем список, если текущий элемент не виден
+                if current_selection < start_idx:
+                    start_idx = current_selection
         elif key == curses.KEY_DOWN:
-            current_selection = min(len(news_items) - 1, current_selection + 1)
-            if current_selection >= start_idx + visible_items:
-                start_idx = current_selection - visible_items + 1
+            if current_selection < len(news_items) - 1:
+                current_selection += 1
+                # Прокручиваем список, если текущий элемент не виден
+                if current_selection >= start_idx + visible_count:
+                    start_idx += 1
         elif key == curses.KEY_PPAGE:
-            current_selection = max(0, current_selection - visible_items)
-            start_idx = max(0, start_idx - visible_items)
+            current_selection = max(0, current_selection - visible_count)
+            start_idx = max(0, start_idx - visible_count)
         elif key == curses.KEY_NPAGE:
-            current_selection = min(len(news_items)-1, current_selection + visible_items)
-            start_idx = min(len(news_items)-visible_items, start_idx + visible_items)
+            current_selection = min(len(news_items)-1, current_selection + visible_count)
+            start_idx = min(len(news_items)-visible_count, start_idx + visible_count)
         elif key == ord('q') or key == ord('Q'):
             break
         elif key == curses.KEY_ENTER or key in [10, 13]:
