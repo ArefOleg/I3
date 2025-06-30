@@ -38,6 +38,9 @@ class TaskManagerTUI:
         self.stdscr = stdscr
         self.tasks = []
         self.selected_idx = 0
+        self.prev_selected_idx = -1
+        self.prev_task_count = 0
+        self.needs_full_redraw = True
         self.load_tasks()
         self.init_curses()
         self.run()
@@ -55,7 +58,8 @@ class TaskManagerTUI:
         curses.cbreak()
         curses.noecho()
         curses.curs_set(0)  # Скрыть курсор
-        self.stdscr.timeout(100)  # Неблокирующее чтение с таймаутом
+        self.stdscr.timeout(200)  # Увеличили таймаут для уменьшения частоты обновления
+        self.stdscr.nodelay(False)  # Блокирующий ввод
 
     def check_window_size(self):
         """Проверить размер окна и вывести сообщение, если слишком мало"""
@@ -88,14 +92,9 @@ class TaskManagerTUI:
             tasks_data = [{"name": t.name, "type": t.type, "priority": t.priority} for t in self.tasks]
             json.dump(tasks_data, f, indent=2)
 
-    def draw_ui(self):
-        """Отрисовать интерфейс"""
-        # Проверить размер окна
-        if not self.check_window_size():
-            return
-            
+    def draw_header(self):
+        """Отрисовать статичные элементы интерфейса"""
         h, w = self.stdscr.getmaxyx()
-        self.stdscr.clear()
         
         # Заголовок
         title = " Arch Linux Task Manager "
@@ -110,10 +109,20 @@ class TaskManagerTUI:
         if self.tasks and h > 4:
             header = f"{'#':<4} {'Название':<30} {'Тип':<20} {'Приоритет':<10}"
             safe_addstr(self.stdscr, 2, 2, header[:w-3], curses.A_BOLD)
-        
-        # Список задач
+
+    def draw_tasks(self):
+        """Отрисовать список задач с минимальными изменениями"""
+        h, w = self.stdscr.getmaxyx()
         max_visible = max(0, h - 4)
+        
+        # Очистить только область задач
+        for y in range(3, min(3 + max(self.prev_task_count, max_visible), h-1)):
+            self.stdscr.move(y, 0)
+            self.stdscr.clrtoeol()
+        
+        # Отрисовываем только видимые задачи
         visible_tasks = self.tasks[:max_visible]
+        self.prev_task_count = len(visible_tasks)
         
         for idx, task in enumerate(visible_tasks):
             line_y = 3 + idx
@@ -139,7 +148,23 @@ class TaskManagerTUI:
         if not self.tasks and h > 3:
             no_tasks = "Нет задач. Нажмите Ctrl+N, чтобы добавить новую."
             safe_addstr(self.stdscr, 3, max(0, (w - len(no_tasks)) // 2), no_tasks[:w-1])
+
+    def draw_ui(self):
+        """Отрисовать интерфейс с оптимизацией перерисовки"""
+        # Проверить размер окна
+        if not self.check_window_size():
+            return
+            
+        # Полная перерисовка при первом запуске или изменении размера
+        if self.needs_full_redraw:
+            self.stdscr.clear()
+            self.draw_header()
+            self.needs_full_redraw = False
+            
+        # Обновляем только список задач
+        self.draw_tasks()
         
+        # Обновляем экран
         self.stdscr.refresh()
 
     def input_dialog(self, title, default=""):
@@ -261,6 +286,7 @@ class TaskManagerTUI:
         
         self.tasks.append(Task(name, task_type, priority))
         self.save_tasks()
+        self.prev_selected_idx = -1  # Принудительное обновление
 
     def update_task(self):
         """Обновить выбранную задачу"""
@@ -283,6 +309,7 @@ class TaskManagerTUI:
         
         self.tasks[self.selected_idx] = Task(name, task_type, priority)
         self.save_tasks()
+        self.prev_selected_idx = -1  # Принудительное обновление
 
     def delete_task(self):
         """Удалить выбранную задачу"""
@@ -298,17 +325,27 @@ class TaskManagerTUI:
             self.selected_idx = 0
             
         self.save_tasks()
+        self.prev_selected_idx = -1  # Принудительное обновление
+        self.prev_task_count = len(self.tasks)  # Сбросить счетчик задач
 
     def run(self):
         """Главный цикл приложения"""
         while True:
             try:
-                self.draw_ui()
+                # Перерисовываем только при изменениях
+                if (self.needs_full_redraw or 
+                    self.selected_idx != self.prev_selected_idx or 
+                    len(self.tasks) != self.prev_task_count):
+                    
+                    self.draw_ui()
+                    self.prev_selected_idx = self.selected_idx
+                
                 key = self.stdscr.getch()
                 
                 # Обработка изменения размера окна
                 if key == curses.KEY_RESIZE:
                     curses.resizeterm(*self.stdscr.getmaxyx())
+                    self.needs_full_redraw = True
                     continue
                 
                 # Навигация
