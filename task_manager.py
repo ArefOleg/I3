@@ -20,6 +20,19 @@ MIN_WIDTH = 60
 # Структура задачи
 Task = namedtuple("Task", ["name", "type", "priority"])
 
+def safe_addstr(win, y, x, text, attr=0):
+    """Безопасный вывод текста с проверкой границ экрана"""
+    height, width = win.getmaxyx()
+    if y < 0 or y >= height or x >= width:
+        return
+    
+    # Обрезаем текст, чтобы он помещался в строку
+    text = text[:max(0, width - x - 1)]
+    try:
+        win.addstr(y, max(0, x), text, attr)
+    except curses.error:
+        pass
+
 class TaskManagerTUI:
     def __init__(self, stdscr):
         self.stdscr = stdscr
@@ -35,13 +48,14 @@ class TaskManagerTUI:
         curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)    # low
         curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)   # medium
         curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)      # high
-        curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_WHITE)   # выделение
+        curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_WHITE)    # выделение
         
         # Оптимизация ввода
         self.stdscr.keypad(True)
         curses.cbreak()
         curses.noecho()
         curses.curs_set(0)  # Скрыть курсор
+        self.stdscr.timeout(100)  # Неблокирующее чтение с таймаутом
 
     def check_window_size(self):
         """Проверить размер окна и вывести сообщение, если слишком мало"""
@@ -49,7 +63,7 @@ class TaskManagerTUI:
         if h < MIN_HEIGHT or w < MIN_WIDTH:
             self.stdscr.clear()
             msg = f"Слишком маленькое окно! Минимум: {MIN_WIDTH}x{MIN_HEIGHT}"
-            self.stdscr.addstr(h//2, (w - len(msg))//2, msg, curses.A_BOLD)
+            safe_addstr(self.stdscr, h//2, max(0, (w - len(msg))//2), msg, curses.A_BOLD)
             self.stdscr.refresh()
             return False
         return True
@@ -64,215 +78,11 @@ class TaskManagerTUI:
             with open(TASKS_FILE, "r") as f:
                 data = json.load(f)
                 self.tasks = [Task(**task) for task in data]
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
             pass
 
     def save_tasks(self):
         """Сохранить задачи в файл"""
         with open(TASKS_FILE, "w") as f:
-            json.dump([task._asdict() for task in self.tasks], f, indent=2)
-
-    def draw_ui(self):
-        """Отрисовать интерфейс"""
-        # Проверить размер окна
-        if not self.check_window_size():
-            return
-            
-        h, w = self.stdscr.getmaxyx()
-        self.stdscr.clear()
-        
-        # Заголовок
-        title = " Arch Linux Task Manager "
-        self.stdscr.addstr(0, max(0, (w - len(title)) // 2, title, curses.A_BOLD)
-        
-        # Подсказки
-        help_text = "↑/↓: Навигация | Ctrl+N: Добавить | Enter: Изменить | Ctrl+D: Удалить | q: Выход"
-        if h > 1:
-            self.stdscr.addstr(min(h-1, h-1), 0, help_text[:w-1], curses.A_DIM)
-        
-        # Заголовки таблицы
-        if self.tasks and h > 4:
-            header = f"{'#':<4} {'Название':<30} {'Тип':<20} {'Приоритет':<10}"
-            self.stdscr.addstr(2, 2, header[:w-3], curses.A_BOLD)
-        
-        # Список задач
-        max_visible = max(0, h - 4)
-        for idx, task in enumerate(self.tasks[:max_visible]):
-            # Пропустить, если строка выходит за пределы экрана
-            if idx + 3 >= h:
-                break
-                
-            # Определение цвета приоритета
-            color = curses.color_pair(COLORS[task.priority])
-            
-            # Подсветка выбранной строки
-            if idx == self.selected_idx and idx + 3 < h:
-                self.stdscr.addstr(3 + idx, 0, " " * w, curses.color_pair(4))
-            
-            # Отображение задачи
-            if idx + 3 < h:
-                task_line = f"{idx+1:<4} {task.name:<30} {task.type:<20} {task.priority:<10}"
-                self.stdscr.addstr(3 + idx, 2, task_line[:w-3], color | (curses.A_BOLD if idx == self.selected_idx else 0))
-        
-        # Сообщение, если задач нет
-        if not self.tasks and h > 3:
-            no_tasks = "Нет задач. Нажмите Ctrl+N, чтобы добавить новую."
-            self.stdscr.addstr(3, max(0, (w - len(no_tasks)) // 2), no_tasks[:w-1])
-        
-        self.stdscr.refresh()
-
-    def input_dialog(self, title, default=""):
-        """Диалог ввода текста"""
-        # Проверить размер окна
-        if not self.check_window_size():
-            return None
-            
-        h, w = self.stdscr.getmaxyx()
-        # Убедиться, что диалог помещается
-        if h < 5 or w < 50:
-            return None
-            
-        win = curses.newwin(3, 50, h//2, (w-50)//2)
-        win.border()
-        win.addstr(0, 2, f" {title} ")
-        win.refresh()
-        
-        curses.echo()
-        curses.curs_set(1)
-        win.move(1, 1)
-        win.clrtoeol()
-        
-        input_str = default
-        win.addstr(1, 1, input_str)
-        win.refresh()
-        
-        while True:
-            ch = win.getch()
-            if ch == 10:  # Enter
-                break
-            elif ch == 27:  # ESC
-                input_str = None
-                break
-            elif ch == curses.KEY_BACKSPACE or ch == 127:
-                input_str = input_str[:-1]
-            elif ch >= 32 and ch <= 126:  # Только печатаемые символы
-                input_str += chr(ch)
-            
-            win.move(1, 1)
-            win.clrtoeol()
-            win.addstr(1, 1, input_str[:48])
-        
-        curses.noecho()
-        curses.curs_set(0)
-        return input_str
-
-    def select_priority(self):
-        """Диалог выбора приоритета"""
-        # Проверить размер окна
-        if not self.check_window_size():
-            return None
-            
-        h, w = self.stdscr.getmaxyx()
-        # Убедиться, что диалог помещается
-        if h < 7 or w < 30:
-            return None
-            
-        win = curses.newwin(5, 30, h//2, (w-30)//2)
-        win.border()
-        win.addstr(0, 2, " Выберите приоритет ")
-        win.addstr(1, 2, "1. Низкий", curses.color_pair(1))
-        win.addstr(2, 2, "2. Средний", curses.color_pair(2))
-        win.addstr(3, 2, "3. Высокий", curses.color_pair(3))
-        win.refresh()
-        
-        while True:
-            ch = win.getch()
-            if ch == ord('1'):
-                return "low"
-            elif ch == ord('2'):
-                return "medium"
-            elif ch == ord('3'):
-                return "high"
-            elif ch == 27:  # ESC
-                return None
-
-    def add_task(self):
-        """Добавить новую задачу"""
-        name = self.input_dialog("Название задачи")
-        if name is None or name.strip() == "":
-            return
-        
-        task_type = self.input_dialog("Тип задачи")
-        if task_type is None:
-            return
-        
-        priority = self.select_priority()
-        if priority is None:
-            return
-        
-        self.tasks.append(Task(name, task_type, priority))
-        self.save_tasks()
-
-    def update_task(self):
-        """Обновить выбранную задачу"""
-        if not self.tasks:
-            return
-        
-        task = self.tasks[self.selected_idx]
-        
-        name = self.input_dialog("Название задачи", task.name)
-        if name is None:
-            return
-        
-        task_type = self.input_dialog("Тип задачи", task.type)
-        if task_type is None:
-            return
-        
-        priority = self.select_priority()
-        if priority is None:
-            return
-        
-        self.tasks[self.selected_idx] = Task(name, task_type, priority)
-        self.save_tasks()
-
-    def delete_task(self):
-        """Удалить выбранную задачу"""
-        if not self.tasks:
-            return
-        
-        # Обновить индекс, если он выходит за пределы
-        if self.selected_idx >= len(self.tasks):
-            self.selected_idx = max(0, len(self.tasks) - 1)
-            
-        del self.tasks[self.selected_idx]
-        if self.selected_idx >= len(self.tasks) and self.selected_idx > 0:
-            self.selected_idx = len(self.tasks) - 1
-        self.save_tasks()
-
-    def run(self):
-        """Главный цикл приложения"""
-        while True:
-            self.draw_ui()
-            key = self.stdscr.getch()
-            
-            # Навигация
-            if key == curses.KEY_UP and self.selected_idx > 0:
-                self.selected_idx -= 1
-            elif key == curses.KEY_DOWN and self.selected_idx < len(self.tasks) - 1:
-                self.selected_idx += 1
-            
-            # Горячие клавиши
-            elif key == ord('q') or key == ord('Q'):  # Выход
-                break
-            elif key == 10 or key == curses.KEY_ENTER:  # Enter - редактировать
-                self.update_task()
-            elif key == 4:  # Ctrl+D - удалить
-                self.delete_task()
-            elif key == 14:  # Ctrl+N - добавить
-                self.add_task()
-
-def main(stdscr):
-    app = TaskManagerTUI(stdscr)
-
-if __name__ == "__main__":
-    wrapper(main)
+            # Преобразуем namedtuple в словари
+            tasks_data = [{"name": t.name, "type": t.type, "priority": t.priority}
