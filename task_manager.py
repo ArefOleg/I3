@@ -20,27 +20,11 @@ MIN_WIDTH = 60
 # Структура задачи
 Task = namedtuple("Task", ["name", "type", "priority"])
 
-def safe_addstr(win, y, x, text, attr=0):
-    """Безопасный вывод текста с проверкой границ экрана"""
-    height, width = win.getmaxyx()
-    if y < 0 or y >= height or x >= width:
-        return
-    
-    # Обрезаем текст, чтобы он помещался в строку
-    text = text[:max(0, width - x - 1)]
-    try:
-        win.addstr(y, max(0, x), text, attr)
-    except curses.error:
-        pass
-
 class TaskManagerTUI:
     def __init__(self, stdscr):
         self.stdscr = stdscr
         self.tasks = []
         self.selected_idx = 0
-        self.prev_selected_idx = -1
-        self.prev_task_count = 0
-        self.needs_full_redraw = True
         self.load_tasks()
         self.init_curses()
         self.run()
@@ -48,29 +32,21 @@ class TaskManagerTUI:
     def init_curses(self):
         # Настройка цветов
         curses.start_color()
-        curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)    # low
-        curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)   # medium
-        curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)      # high
-        curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_WHITE)    # выделение
+        curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)
+        curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+        curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)
+        curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_WHITE)
         
         # Оптимизация ввода
         self.stdscr.keypad(True)
         curses.cbreak()
         curses.noecho()
         curses.curs_set(0)  # Скрыть курсор
-        self.stdscr.timeout(200)  # Увеличили таймаут для уменьшения частоты обновления
-        self.stdscr.nodelay(False)  # Блокирующий ввод
 
     def check_window_size(self):
-        """Проверить размер окна и вывести сообщение, если слишком мало"""
+        """Проверить размер окна"""
         h, w = self.stdscr.getmaxyx()
-        if h < MIN_HEIGHT or w < MIN_WIDTH:
-            self.stdscr.clear()
-            msg = f"Слишком маленькое окно! Минимум: {MIN_WIDTH}x{MIN_HEIGHT}"
-            safe_addstr(self.stdscr, h//2, max(0, (w - len(msg))//2), msg, curses.A_BOLD)
-            self.stdscr.refresh()
-            return False
-        return True
+        return h >= MIN_HEIGHT and w >= MIN_WIDTH
 
     def load_tasks(self):
         """Загрузить задачи из файла"""
@@ -88,46 +64,37 @@ class TaskManagerTUI:
     def save_tasks(self):
         """Сохранить задачи в файл"""
         with open(TASKS_FILE, "w") as f:
-            # Преобразуем namedtuple в словари
             tasks_data = [{"name": t.name, "type": t.type, "priority": t.priority} for t in self.tasks]
             json.dump(tasks_data, f, indent=2)
 
-    def draw_header(self):
-        """Отрисовать статичные элементы интерфейса"""
+    def draw_ui(self):
+        """Отрисовать интерфейс"""
+        self.stdscr.clear()
         h, w = self.stdscr.getmaxyx()
         
+        # Проверить размер окна
+        if not self.check_window_size():
+            msg = f"Минимальный размер: {MIN_WIDTH}x{MIN_HEIGHT}"
+            self.stdscr.addstr(0, 0, msg, curses.A_BOLD)
+            self.stdscr.refresh()
+            return
+            
         # Заголовок
         title = " Arch Linux Task Manager "
-        safe_addstr(self.stdscr, 0, max(0, (w - len(title)) // 2), title, curses.A_BOLD)
+        self.stdscr.addstr(0, (w - len(title)) // 2, title, curses.A_BOLD)
         
         # Подсказки
         help_text = "↑/↓: Навигация | Ctrl+N: Добавить | Enter: Изменить | Ctrl+D: Удалить | q: Выход"
-        if h > 1:
-            safe_addstr(self.stdscr, h-1, 0, help_text[:w-1], curses.A_DIM)
+        self.stdscr.addstr(h-1, 0, help_text, curses.A_DIM)
         
         # Заголовки таблицы
-        if self.tasks and h > 4:
+        if self.tasks:
             header = f"{'#':<4} {'Название':<30} {'Тип':<20} {'Приоритет':<10}"
-            safe_addstr(self.stdscr, 2, 2, header[:w-3], curses.A_BOLD)
-
-    def draw_tasks(self):
-        """Отрисовать список задач с минимальными изменениями"""
-        h, w = self.stdscr.getmaxyx()
-        max_visible = max(0, h - 4)
+            self.stdscr.addstr(2, 2, header, curses.A_BOLD)
         
-        # Очистить только область задач
-        for y in range(3, min(3 + max(self.prev_task_count, max_visible), h-1)):
-            self.stdscr.move(y, 0)
-            self.stdscr.clrtoeol()
-        
-        # Отрисовываем только видимые задачи
-        visible_tasks = self.tasks[:max_visible]
-        self.prev_task_count = len(visible_tasks)
-        
-        for idx, task in enumerate(visible_tasks):
-            line_y = 3 + idx
-            # Проверка, что строка в пределах экрана
-            if line_y >= h:
+        # Список задач
+        for idx, task in enumerate(self.tasks):
+            if idx + 3 >= h:  # Не помещается на экран
                 break
                 
             # Определение цвета приоритета
@@ -135,76 +102,40 @@ class TaskManagerTUI:
             
             # Подсветка выбранной строки
             if idx == self.selected_idx:
-                try:
-                    self.stdscr.addstr(line_y, 0, " " * w, curses.color_pair(4))
-                except curses.error:
-                    pass
+                self.stdscr.addstr(3 + idx, 0, " " * w, curses.color_pair(4))
             
             # Отображение задачи
             task_line = f"{idx+1:<4} {task.name[:25]:<30} {task.type[:15]:<20} {task.priority:<10}"
-            safe_addstr(self.stdscr, line_y, 2, task_line[:w-3], color)
+            self.stdscr.addstr(3 + idx, 2, task_line, color)
         
         # Сообщение, если задач нет
-        if not self.tasks and h > 3:
+        if not self.tasks:
             no_tasks = "Нет задач. Нажмите Ctrl+N, чтобы добавить новую."
-            safe_addstr(self.stdscr, 3, max(0, (w - len(no_tasks)) // 2), no_tasks[:w-1])
-
-    def draw_ui(self):
-        """Отрисовать интерфейс с оптимизацией перерисовки"""
-        # Проверить размер окна
-        if not self.check_window_size():
-            return
-            
-        # Полная перерисовка при первом запуске или изменении размера
-        if self.needs_full_redraw:
-            self.stdscr.clear()
-            self.draw_header()
-            self.needs_full_redraw = False
-            
-        # Обновляем только список задач
-        self.draw_tasks()
+            self.stdscr.addstr(3, (w - len(no_tasks)) // 2, no_tasks)
         
-        # Обновляем экран
         self.stdscr.refresh()
 
     def input_dialog(self, title, default=""):
         """Диалог ввода текста"""
-        # Проверить размер окна
-        if not self.check_window_size():
-            return None
-            
         h, w = self.stdscr.getmaxyx()
-        # Убедиться, что диалог помещается
-        if h < 5 or w < 50:
-            return None
-            
-        # Создать окно диалога
-        dialog_h = 3
-        dialog_w = min(50, w-4)
-        y = max(0, (h - dialog_h) // 2)
-        x = max(0, (w - dialog_w) // 2)
         
-        try:
-            win = curses.newwin(dialog_h, dialog_w, y, x)
-            win.border()
-            safe_addstr(win, 0, 2, f" {title} ", curses.A_BOLD)
-            win.refresh()
-        except curses.error:
-            return None
+        # Создать окно диалога
+        win = curses.newwin(3, 50, h//2, (w-50)//2)
+        win.border()
+        win.addstr(0, 2, f" {title} ")
+        win.refresh()
         
         curses.echo()
         curses.curs_set(1)
         
         input_str = default
-        win.move(1, 1)
-        win.clrtobot()
-        safe_addstr(win, 1, 1, input_str)
+        win.addstr(1, 1, input_str)
         win.refresh()
         
         while True:
             try:
                 ch = win.getch()
-            except curses.error:
+            except:
                 continue
                 
             if ch == 10:  # Enter
@@ -214,13 +145,12 @@ class TaskManagerTUI:
                 break
             elif ch == curses.KEY_BACKSPACE or ch == 127:
                 input_str = input_str[:-1]
-            elif ch >= 32 and ch <= 126:  # Только печатаемые символы
-                if len(input_str) < dialog_w - 2:
-                    input_str += chr(ch)
+            elif ch >= 32 and ch <= 126:  # Печатаемые символы
+                input_str += chr(ch)
             
             win.move(1, 1)
             win.clrtoeol()
-            safe_addstr(win, 1, 1, input_str)
+            win.addstr(1, 1, input_str)
             win.refresh()
         
         curses.noecho()
@@ -229,36 +159,21 @@ class TaskManagerTUI:
 
     def select_priority(self):
         """Диалог выбора приоритета"""
-        # Проверить размер окна
-        if not self.check_window_size():
-            return None
-            
         h, w = self.stdscr.getmaxyx()
-        # Убедиться, что диалог помещается
-        if h < 7 or w < 30:
-            return None
-            
-        # Создать окно диалога
-        dialog_h = 5
-        dialog_w = min(30, w-4)
-        y = max(0, (h - dialog_h) // 2)
-        x = max(0, (w - dialog_w) // 2)
         
-        try:
-            win = curses.newwin(dialog_h, dialog_w, y, x)
-            win.border()
-            safe_addstr(win, 0, 2, " Выберите приоритет ", curses.A_BOLD)
-            safe_addstr(win, 1, 2, "1. Низкий", curses.color_pair(1))
-            safe_addstr(win, 2, 2, "2. Средний", curses.color_pair(2))
-            safe_addstr(win, 3, 2, "3. Высокий", curses.color_pair(3))
-            win.refresh()
-        except curses.error:
-            return None
+        # Создать окно диалога
+        win = curses.newwin(5, 30, h//2, (w-30)//2)
+        win.border()
+        win.addstr(0, 2, " Выберите приоритет ")
+        win.addstr(1, 2, "1. Низкий", curses.color_pair(1))
+        win.addstr(2, 2, "2. Средний", curses.color_pair(2))
+        win.addstr(3, 2, "3. Высокий", curses.color_pair(3))
+        win.refresh()
         
         while True:
             try:
                 ch = win.getch()
-            except curses.error:
+            except:
                 continue
                 
             if ch == ord('1'):
@@ -286,7 +201,6 @@ class TaskManagerTUI:
         
         self.tasks.append(Task(name, task_type, priority))
         self.save_tasks()
-        self.prev_selected_idx = -1  # Принудительное обновление
 
     def update_task(self):
         """Обновить выбранную задачу"""
@@ -309,7 +223,6 @@ class TaskManagerTUI:
         
         self.tasks[self.selected_idx] = Task(name, task_type, priority)
         self.save_tasks()
-        self.prev_selected_idx = -1  # Принудительное обновление
 
     def delete_task(self):
         """Удалить выбранную задачу"""
@@ -325,69 +238,36 @@ class TaskManagerTUI:
             self.selected_idx = 0
             
         self.save_tasks()
-        self.prev_selected_idx = -1  # Принудительное обновление
-        self.prev_task_count = len(self.tasks)  # Сбросить счетчик задач
 
     def run(self):
         """Главный цикл приложения"""
         while True:
-            try:
-                # Перерисовываем только при изменениях
-                if (self.needs_full_redraw or 
-                    self.selected_idx != self.prev_selected_idx or 
-                    len(self.tasks) != self.prev_task_count):
-                    
-                    self.draw_ui()
-                    self.prev_selected_idx = self.selected_idx
-                
-                key = self.stdscr.getch()
-                
-                # Обработка изменения размера окна
-                if key == curses.KEY_RESIZE:
-                    curses.resizeterm(*self.stdscr.getmaxyx())
-                    self.needs_full_redraw = True
-                    continue
-                
-                # Навигация
-                if key == curses.KEY_UP and self.selected_idx > 0:
-                    self.selected_idx -= 1
-                elif key == curses.KEY_DOWN and self.selected_idx < len(self.tasks) - 1:
-                    self.selected_idx += 1
-                
-                # Горячие клавиши
-                elif key == ord('q') or key == ord('Q'):  # Выход
-                    break
-                elif key == 10 or key == curses.KEY_ENTER:  # Enter - редактировать
-                    self.update_task()
-                elif key == 4:  # Ctrl+D - удалить
-                    self.delete_task()
-                elif key == 14:  # Ctrl+N - добавить
-                    self.add_task()
-                    
-            except Exception as e:
-                # В случае любой ошибки продолжить работу
-                with open("task_manager_error.log", "a") as f:
-                    f.write(f"Error: {str(e)}\n")
+            self.draw_ui()
+            key = self.stdscr.getch()
+            
+            # Обработка изменения размера окна
+            if key == curses.KEY_RESIZE:
                 continue
+            
+            # Навигация
+            if key == curses.KEY_UP and self.selected_idx > 0:
+                self.selected_idx -= 1
+            elif key == curses.KEY_DOWN and self.selected_idx < len(self.tasks) - 1:
+                self.selected_idx += 1
+            
+            # Горячие клавиши
+            elif key == ord('q') or key == ord('Q'):  # Выход
+                break
+            elif key == 10 or key == curses.KEY_ENTER:  # Enter - редактировать
+                self.update_task()
+            elif key == 4:  # Ctrl+D - удалить
+                self.delete_task()
+            elif key == 14:  # Ctrl+N - добавить
+                self.add_task()
 
 def main(stdscr):
-    # Включить обработку изменения размера окна
     curses.use_default_colors()
-    if curses.has_colors():
-        curses.start_color()
-    
-    # Инициализировать экран
-    stdscr.clear()
-    stdscr.refresh()
-    
-    # Запустить приложение
     app = TaskManagerTUI(stdscr)
 
 if __name__ == "__main__":
-    try:
-        wrapper(main)
-    except Exception as e:
-        with open("task_manager_crash.log", "w") as f:
-            f.write(f"Critical error: {str(e)}\n")
-        # Попытка восстановить терминал
-        os.system('reset')
+    wrapper(main)
