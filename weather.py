@@ -1,6 +1,6 @@
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # Конфигурация
 API_KEY = "433019b64ac853fc53c1d38f63576c8b"
@@ -109,6 +109,12 @@ def clear_screen():
     """Очищает экран терминала"""
     print("\033[H\033[J", end="")
 
+def get_moscow_time():
+    """Возвращает текущее время в Москве с учетом часового пояса"""
+    # Часовой пояс Москвы (UTC+3)
+    moscow_tz = timezone(timedelta(hours=3))
+    return datetime.now(moscow_tz).strftime("%H:%M:%S")
+
 def get_weather():
     """Получает и отображает текущую погоду"""
     try:
@@ -137,8 +143,8 @@ def get_weather():
             feels_color = get_temp_color(feels_like)
             reset = COLORS["RESET"]
             
-            # Текущее время
-            now = datetime.now().strftime("%H:%M:%S")
+            # Текущее время в Москве
+            now = get_moscow_time()
             
             # Очистка экрана и вывод заголовка
             clear_screen()
