@@ -2,6 +2,7 @@
 import json
 import os
 import curses
+import textwrap
 from curses import wrapper
 from collections import namedtuple
 
@@ -20,11 +21,19 @@ MIN_WIDTH = 60
 # Структура задачи
 Task = namedtuple("Task", ["name", "type", "priority"])
 
+def wrap_text(text, width):
+    """Разбивает текст на строки с переносом"""
+    if not text:
+        return [""]
+    return textwrap.wrap(text, width=width) or [""]
+
 class TaskManagerTUI:
     def __init__(self, stdscr):
         self.stdscr = stdscr
         self.tasks = []
         self.selected_idx = 0
+        self.top_idx = 0  # Индекс первой отображаемой задачи
+        self.task_lines = []  # Количество строк для каждой задачи
         self.load_tasks()
         self.init_curses()
         self.run()
@@ -36,6 +45,7 @@ class TaskManagerTUI:
         curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)
         curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)
         curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_WHITE)
+        curses.init_pair(5, curses.COLOR_CYAN, curses.COLOR_BLACK)
         
         # Оптимизация ввода
         self.stdscr.keypad(True)
@@ -67,6 +77,17 @@ class TaskManagerTUI:
             tasks_data = [{"name": t.name, "type": t.type, "priority": t.priority} for t in self.tasks]
             json.dump(tasks_data, f, indent=2)
 
+    def calculate_layout(self, w):
+        """Вычислить параметры отображения"""
+        # Ширины колонок
+        return {
+            "number": 4,
+            "name": max(10, w - 40),  # Ширина названия (остальное - под другие колонки)
+            "type": 15,
+            "priority": 10,
+            "spacing": 3  # Пробелы между колонками
+        }
+
     def draw_ui(self):
         """Отрисовать интерфейс"""
         self.stdscr.clear()
@@ -87,26 +108,80 @@ class TaskManagerTUI:
         help_text = "↑/↓: Навигация | Ctrl+N: Добавить | Enter: Изменить | Ctrl+D: Удалить | q: Выход"
         self.stdscr.addstr(h-1, 0, help_text, curses.A_DIM)
         
-        # Заголовки таблицы
+        # Рассчитать параметры отображения
+        layout = self.calculate_layout(w)
+        name_width = layout["name"]
+        
+        # Сгенерировать строки для задач
+        self.task_lines = []
+        visible_tasks = []
+        for idx, task in enumerate(self.tasks):
+            # Разбить название на строки
+            name_lines = wrap_text(task.name, name_width)
+            # Обрезать тип задачи
+            task_type = task.type[:layout["type"]] + (task.type[layout["type"]:] and "..")
+            # Для каждой строки названия создаем отдельную запись
+            for i, name_line in enumerate(name_lines):
+                visible_tasks.append({
+                    "idx": idx,
+                    "name": name_line,
+                    "type": task_type if i == 0 else "",  # Тип только в первой строке
+                    "priority": task.priority if i == 0 else "",  # Приоритет только в первой строке
+                    "is_first": i == 0
+                })
+            self.task_lines.append(len(name_lines))
+        
+        # Отобразить заголовки таблицы
         if self.tasks:
-            header = f"{'#':<4} {'Название':<30} {'Тип':<20} {'Приоритет':<10}"
+            header = (f"{'#':<{layout['number']}} "
+                      f"{'Название':<{name_width}} "
+                      f"{'Тип':<{layout['type']}} "
+                      f"{'Приоритет':<{layout['priority']}}")
             self.stdscr.addstr(2, 2, header, curses.A_BOLD)
         
-        # Список задач
-        for idx, task in enumerate(self.tasks):
-            if idx + 3 >= h:  # Не помещается на экран
-                break
-                
-            # Определение цвета приоритета
-            color = curses.color_pair(COLORS.get(task.priority, 2))
+        # Отобразить задачи (только видимую часть)
+        current_line = 3
+        visible_count = 0
+        
+        # Определить диапазон отображаемых задач
+        start_idx = 0
+        for i in range(self.top_idx):
+            start_idx += self.task_lines[i]
+        end_idx = min(start_idx + h - 4, len(visible_tasks))
+
+        for idx in range(start_idx, end_idx):
+            task = visible_tasks[idx]
+            actual_idx = task["idx"]
             
-            # Подсветка выбранной строки
-            if idx == self.selected_idx:
-                self.stdscr.addstr(3 + idx, 0, " " * w, curses.color_pair(4))
+            # Определение цвета приоритета
+            color = curses.color_pair(COLORS.get(task["priority"], 2))
+            if not task["is_first"]:
+                color = curses.color_pair(5)  # Дополнительные строки - другим цветом
+            
+            # Подсветка выбранной задачи
+            if actual_idx == self.selected_idx:
+                self.stdscr.addstr(current_line, 0, " " * w, curses.color_pair(4))
+            
+            # Форматирование номера задачи
+            number = f"{actual_idx+1}." if task["is_first"] else ""
             
             # Отображение задачи
-            task_line = f"{idx+1:<4} {task.name[:25]:<30} {task.type[:15]:<20} {task.priority:<10}"
-            self.stdscr.addstr(3 + idx, 2, task_line, color)
+            task_line = (f"{number:<{layout['number']}} "
+                         f"{task['name']:<{name_width}} "
+                         f"{task['type']:<{layout['type']}} "
+                         f"{task['priority']:<{layout['priority']}}")
+            self.stdscr.addstr(current_line, 2, task_line, color)
+            
+            current_line += 1
+            visible_count += 1
+            if current_line >= h - 1:
+                break
+        
+        # Показать индикатор прокрутки
+        if start_idx > 0:
+            self.stdscr.addstr(3, w-2, "↑", curses.A_BOLD)
+        if end_idx < len(visible_tasks):
+            self.stdscr.addstr(h-2, w-2, "↓", curses.A_BOLD)
         
         # Сообщение, если задач нет
         if not self.tasks:
@@ -252,8 +327,26 @@ class TaskManagerTUI:
             # Навигация
             if key == curses.KEY_UP and self.selected_idx > 0:
                 self.selected_idx -= 1
+                # Прокрутка вверх, если выбранная задача не видна
+                if self.selected_idx < self.top_idx:
+                    self.top_idx = self.selected_idx
             elif key == curses.KEY_DOWN and self.selected_idx < len(self.tasks) - 1:
                 self.selected_idx += 1
+                # Прокрутка вниз, если выбранная задача не видна
+                total_lines = sum(self.task_lines[:self.selected_idx+1])
+                visible_lines = sum(self.task_lines[self.top_idx:self.selected_idx+1])
+                h, w = self.stdscr.getmaxyx()
+                if visible_lines > h - 4:
+                    self.top_idx += 1
+            
+            # Прокрутка страницы
+            elif key == curses.KEY_PPAGE and self.top_idx > 0:
+                self.top_idx = max(0, self.top_idx - 1)
+            elif key == curses.KEY_NPAGE:
+                h, w = self.stdscr.getmaxyx()
+                visible_lines = sum(self.task_lines[self.top_idx:self.top_idx + h - 4])
+                if visible_lines < sum(self.task_lines) - 1:
+                    self.top_idx += 1
             
             # Горячие клавиши
             elif key == ord('q') or key == ord('Q'):  # Выход
