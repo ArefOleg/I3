@@ -18,6 +18,29 @@ os.makedirs(LOG_DIR, exist_ok=True)
 MIN_HEIGHT = 15
 MIN_WIDTH = 80
 
+# Список типов объектов
+OBJECT_TYPES = [
+    "SQL",
+    "Applet",
+    "Application",
+    "Business Component",
+    "Business Object",
+    "Business Service",
+    "Integration Object",
+    "Link",
+    "Job",
+    "Outbound Web Service",
+    "Inbound Web Service",
+    "Pick List",
+    "Task",
+    "Table",
+    "Screen",
+    "View",
+    "Workflow Process",
+    "Workflow Policy",
+    "Product"
+]
+
 # Структура задачи
 Task = namedtuple("Task", ["jira_id", "title", "description"])
 
@@ -270,14 +293,115 @@ class TaskManagerTUI:
             
         self.save_tasks()
 
+    def show_object_type_menu(self):
+        """Показать меню выбора типа объекта"""
+        h, w = self.stdscr.getmaxyx()
+        win_height = min(len(OBJECT_TYPES) + 4, h - 4)
+        win_width = 40
+        win = curses.newwin(win_height, win_width, (h - win_height) // 2, (w - win_width) // 2)
+        win.border()
+        win.keypad(True)
+        
+        title = " Выберите тип объекта "
+        win.addstr(0, (win_width - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
+        
+        selected_idx = 0
+        top_idx = 0
+        
+        while True:
+            win.clear()
+            win.border()
+            win.addstr(0, (win_width - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
+            
+            # Отображение доступных типов объектов
+            for idx in range(top_idx, min(top_idx + win_height - 4, len(OBJECT_TYPES))):
+                obj_type = OBJECT_TYPES[idx]
+                y_pos = idx - top_idx + 1
+                
+                if idx == selected_idx:
+                    win.addstr(y_pos, 2, "> " + obj_type, curses.color_pair(4))
+                else:
+                    win.addstr(y_pos, 2, "  " + obj_type)
+            
+            # Подсказка
+            help_text = "Enter: Выбрать | Esc: Отмена"
+            win.addstr(win_height - 1, (win_width - len(help_text)) // 2, help_text, curses.A_DIM)
+            
+            key = win.getch()
+            
+            if key == curses.KEY_UP:
+                if selected_idx > 0:
+                    selected_idx -= 1
+                    if selected_idx < top_idx:
+                        top_idx = selected_idx
+            elif key == curses.KEY_DOWN:
+                if selected_idx < len(OBJECT_TYPES) - 1:
+                    selected_idx += 1
+                    if selected_idx >= top_idx + win_height - 4:
+                        top_idx += 1
+            elif key == curses.KEY_PPAGE:
+                selected_idx = max(0, selected_idx - (win_height - 4))
+                top_idx = selected_idx
+            elif key == curses.KEY_NPAGE:
+                selected_idx = min(len(OBJECT_TYPES) - 1, selected_idx + (win_height - 4))
+                top_idx = max(0, selected_idx - (win_height - 5))
+            elif key == 10:  # Enter
+                return OBJECT_TYPES[selected_idx]
+            elif key == 27:  # ESC
+                return None
+        
+        return None
+
     def add_object(self, jira_id):
         """Добавить новый объект"""
-        obj_name = self.input_dialog("Новый объект")
+        # Выбор типа объекта
+        obj_type = self.show_object_type_menu()
+        if obj_type is None:
+            return
+        
+        # Ввод имени объекта
+        obj_name = self.input_dialog(f"Имя объекта ({obj_type})")
         if obj_name is None or not obj_name.strip():
             return
         
+        # Ввод описания объекта
+        obj_description = self.input_dialog(f"Описание объекта ({obj_type})", default="")
+        if obj_description is None:
+            obj_description = ""
+        
+        # Добавление объекта
         objects = self.load_objects(jira_id)
-        objects.append(obj_name)
+        objects.append({
+            "type": obj_type,
+            "name": obj_name,
+            "description": obj_description
+        })
+        self.save_objects(jira_id, objects)
+
+    def edit_object(self, jira_id):
+        """Редактировать существующий объект"""
+        objects = self.load_objects(jira_id)
+        if not objects or self.object_idx >= len(objects):
+            return
+        
+        obj = objects[self.object_idx]
+        
+        # Редактирование имени
+        new_name = self.input_dialog("Имя объекта", obj["name"])
+        if new_name is None:
+            return
+        
+        # Редактирование описания
+        new_desc = self.input_dialog("Описание объекта", obj["description"])
+        if new_desc is None:
+            return
+        
+        # Обновление объекта
+        objects[self.object_idx] = {
+            "type": obj["type"],
+            "name": new_name,
+            "description": new_desc
+        }
         self.save_objects(jira_id, objects)
 
     def delete_object(self, jira_id):
@@ -442,8 +566,20 @@ class TaskManagerTUI:
             for idx, obj in enumerate(objects):
                 if 6 + idx >= h - 1:
                     break
+                
+                # Форматируем строку для отображения
+                obj_str = f"[{obj['type']}] {obj['name']}"
+                if obj['description']:
+                    # Берем первую строку описания
+                    first_line = obj['description'].split('\n')[0]
+                    # Обрезаем длинное описание
+                    max_desc_len = w - 30
+                    if len(first_line) > max_desc_len:
+                        first_line = first_line[:max_desc_len-3] + "..."
+                    obj_str += f": {first_line}"
+                
                 prefix = ">" if idx == self.object_idx else " "
-                self.stdscr.addstr(6 + idx, 2, f"{prefix}{idx+1}. {obj}", curses.color_pair(5))
+                self.stdscr.addstr(6 + idx, 2, f"{prefix}{idx+1}. {obj_str}", curses.color_pair(5))
         
         elif self.task_detail_section == 2:  # Логи
             today = datetime.now().strftime("%Y-%m-%d")
@@ -530,12 +666,12 @@ class TaskManagerTUI:
             
             # Режим деталей задачи
             elif self.mode == "task_detail":
-                # ОБНОВЛЕНИЕ: Обработка Esc в первую очередь
+                # Обработка Esc в первую очередь
                 if key == 27:  # ESC - возврат в список задач
                     self.mode = "task_list"
                     continue
                     
-                # ОБНОВЛЕНИЕ: Обработка Ctrl+U в первую очередь
+                # Обработка Ctrl+U в первую очередь
                 elif key == 21:  # Ctrl+U
                     if self.task_detail_section == 0:  # Редактировать описание
                         self.edit_description()
@@ -592,11 +728,9 @@ class TaskManagerTUI:
                 
                 # Выбор раздела/действия
                 elif key == 10 or key == curses.KEY_ENTER:
-                    if self.task_detail_section == 1 and objects:
-                        # Просмотр объектов
-                        pass
-                    elif self.task_detail_section == 2 and logs:
-                        # Просмотр логов
+                    if self.task_detail_section == 1:  # Редактировать объект
+                        self.edit_object(self.tasks[self.selected_idx].jira_id)
+                    elif self.task_detail_section == 2 and logs:  # Просмотр логов
                         pass
                 
                 # Добавление
@@ -611,7 +745,6 @@ class TaskManagerTUI:
                     if self.task_detail_section == 1:  # Удалить объект
                         self.delete_object(self.tasks[self.selected_idx].jira_id)
                     elif self.task_detail_section == 2:  # Удалить лог
-                        # Реализация удаления лога
                         pass
             
             # Выход по Ctrl+C
