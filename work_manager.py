@@ -383,7 +383,7 @@ class TaskManagerTUI:
         self.stdscr.addstr(0, (w - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
         
         # Подсказки
-        help_text = "←/→: Разделы | ↑/↓: Навигация | Enter: Выбрать | Ctrl+N/U: Редактировать | Ctrl+D: Удалить | Esc: Назад"
+        help_text = "←/→: Разделы | ↑/↓: Навигация | Enter: Выбрать | Ctrl+N: Добавить | Ctrl+U: Обновить | Ctrl+D: Удалить | Esc: Назад"
         self.stdscr.addstr(h-1, 0, help_text, curses.A_DIM)
         
         # Разделы
@@ -404,7 +404,7 @@ class TaskManagerTUI:
         # Отображение содержимого раздела
         if self.task_detail_section == 0:  # Описание
             # Индикатор редактирования
-            edit_hint = "Ctrl+N/U: Редактировать описание" if task.description else "Ctrl+N/U: Добавить описание"
+            edit_hint = "Ctrl+U: Редактировать описание" if task.description else "Ctrl+U: Добавить описание"
             self.stdscr.addstr(2, w - len(edit_hint) - 2, edit_hint, curses.A_DIM)
             
             if task.description:
@@ -435,7 +435,7 @@ class TaskManagerTUI:
                     if self.description_scroll < max_scroll:
                         self.stdscr.addstr(min(6 + available_height - 1, h-2), w-2, "↓", curses.A_BOLD)
             else:
-                no_desc = "Описание отсутствует. Нажмите Ctrl+N или Ctrl+U, чтобы добавить."
+                no_desc = "Описание отсутствует. Нажмите Ctrl+U, чтобы добавить."
                 self.stdscr.addstr(6, (w - len(no_desc)) // 2, no_desc, curses.color_pair(2))
         
         elif self.task_detail_section == 1:  # Объекты
@@ -523,18 +523,28 @@ class TaskManagerTUI:
                         self.description_scroll = 0
                 elif key == 14:  # Ctrl+N - добавить
                     self.add_task()
-                elif key == 21:  # Ctrl+U
-                    if self.task_detail_section == 0:  # Редактировать описание
-                        self.edit_description()
-                    elif self.task_detail_section == 1:  # Обновить объект
-                        self.update_object(self.tasks[self.selected_idx].jira_id)
-                    elif self.task_detail_section == 2:  # Обновить лог
-                        self.update_log_entry(self.tasks[self.selected_idx].jira_id)
+                elif key == 21:  # Ctrl+U - обновить
+                    self.update_task()
                 elif key == 4:  # Ctrl+D - удалить
                     self.delete_task()
             
             # Режим деталей задачи
             elif self.mode == "task_detail":
+                # ОБНОВЛЕНИЕ: Обработка Esc в первую очередь
+                if key == 27:  # ESC - возврат в список задач
+                    self.mode = "task_list"
+                    continue
+                    
+                # ОБНОВЛЕНИЕ: Обработка Ctrl+U в первую очередь
+                elif key == 21:  # Ctrl+U
+                    if self.task_detail_section == 0:  # Редактировать описание
+                        self.edit_description()
+                    elif self.task_detail_section == 1:  # Добавить объект
+                        self.add_object(self.tasks[self.selected_idx].jira_id)
+                    elif self.task_detail_section == 2:  # Добавить запись в лог
+                        self.add_log_entry(self.tasks[self.selected_idx].jira_id)
+                    continue
+                
                 # Навигация между разделами
                 if key == curses.KEY_LEFT:
                     if self.task_detail_section > 0:
@@ -589,16 +599,12 @@ class TaskManagerTUI:
                         # Просмотр логов
                         pass
                 
-                # Добавление/редактирование
+                # Добавление
                 elif key == 14:  # Ctrl+N
-                    if self.task_detail_section == 0:  # Редактировать описание
-                        self.edit_description()
-                    elif self.task_detail_section == 1:  # Добавить объект
+                    if self.task_detail_section == 1:  # Добавить объект
                         self.add_object(self.tasks[self.selected_idx].jira_id)
                     elif self.task_detail_section == 2:  # Добавить запись в лог
                         self.add_log_entry(self.tasks[self.selected_idx].jira_id)
-                elif key == 21 and self.task_detail_section == 0:  # Ctrl+U: Редактировать описание
-                    self.edit_description()
                 
                 # Удаление
                 elif key == 4:  # Ctrl+D
@@ -607,10 +613,6 @@ class TaskManagerTUI:
                     elif self.task_detail_section == 2:  # Удалить лог
                         # Реализация удаления лога
                         pass
-                
-                # Возврат в список задач
-                elif key == 27:  # ESC
-                    self.mode = "task_list"
             
             # Выход по Ctrl+C
             elif key == 3:
