@@ -523,8 +523,13 @@ class TaskManagerTUI:
                         self.description_scroll = 0
                 elif key == 14:  # Ctrl+N - добавить
                     self.add_task()
-                elif key == 21:  # Ctrl+U - обновить
-                    self.update_task()
+                elif key == 21:  # Ctrl+U
+                    if self.task_detail_section == 0:  # Редактировать описание
+                        self.edit_description()
+                    elif self.task_detail_section == 1:  # Обновить объект
+                        self.update_object(self.tasks[self.selected_idx].jira_id)
+                    elif self.task_detail_section == 2:  # Обновить лог
+                        self.update_log_entry(self.tasks[self.selected_idx].jira_id)
                 elif key == 4:  # Ctrl+D - удалить
                     self.delete_task()
             
