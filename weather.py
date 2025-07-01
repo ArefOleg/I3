@@ -1,9 +1,10 @@
+#1f7ea3317da0c0d2a527b98ae52ba738
 import requests
 import time
 from datetime import datetime, timedelta, timezone
 
 # Конфигурация
-API_KEY = "433019b64ac853fc53c1d38f63576c8b"
+API_KEY = "1f7ea3317da0c0d2a527b98ae52ba738"
 CITY = "Moscow,RU"
 URL = f"http://api.openweathermap.org/data/2.5/weather?q={CITY}&appid={API_KEY}&units=metric&lang=ru"
 REFRESH_INTERVAL = 60  # Обновление каждые 60 секунд
