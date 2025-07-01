@@ -3,6 +3,8 @@ import json
 import os
 import curses
 import textwrap
+import subprocess
+import tempfile
 from datetime import datetime
 from curses import wrapper
 from collections import namedtuple
@@ -17,7 +19,7 @@ MIN_HEIGHT = 15
 MIN_WIDTH = 80
 
 # Структура задачи
-Task = namedtuple("Task", ["jira_id", "title"])
+Task = namedtuple("Task", ["jira_id", "title", "description"])
 
 class TaskManagerTUI:
     def __init__(self, stdscr):
@@ -29,6 +31,7 @@ class TaskManagerTUI:
         self.task_detail_section = 0  # 0: описание, 1: объекты, 2: логи
         self.object_idx = 0
         self.log_idx = 0
+        self.description_scroll = 0
         self.load_tasks()
         self.init_curses()
         self.run()
@@ -63,14 +66,22 @@ class TaskManagerTUI:
         try:
             with open(TASKS_FILE, "r") as f:
                 data = json.load(f)
-                self.tasks = [Task(task["jira_id"], task["title"]) for task in data]
+                for task in data:
+                    # Обеспечим обратную совместимость со старыми задачами
+                    if "description" not in task:
+                        task["description"] = ""
+                    self.tasks.append(Task(task["jira_id"], task["title"], task["description"]))
         except (json.JSONDecodeError, TypeError):
             pass
 
     def save_tasks(self):
         """Сохранить задачи в файл"""
         with open(TASKS_FILE, "w") as f:
-            tasks_data = [{"jira_id": t.jira_id, "title": t.title} for t in self.tasks]
+            tasks_data = [{
+                "jira_id": t.jira_id, 
+                "title": t.title,
+                "description": t.description
+            } for t in self.tasks]
             json.dump(tasks_data, f, indent=2)
 
     def load_objects(self, jira_id):
@@ -151,6 +162,31 @@ class TaskManagerTUI:
         curses.curs_set(0)
         return input_str
 
+    def edit_with_editor(self, content):
+        """Редактирование текста во внешнем редакторе Lite-XL"""
+        # Создаем временный файл
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
+            tmp_path = tmp.name
+            if content:
+                tmp.write(content.encode('utf-8'))
+                tmp.flush()
+        
+        # Запускаем редактор
+        try:
+            subprocess.run(["lite-xl", tmp_path], check=True)
+        except subprocess.CalledProcessError:
+            return None
+        
+        # Читаем результат
+        try:
+            with open(tmp_path, "r") as f:
+                return f.read()
+        except IOError:
+            return None
+        finally:
+            # Удаляем временный файл
+            os.unlink(tmp_path)
+
     def add_task(self):
         """Добавить новую задачу"""
         jira_id = self.input_dialog("JIRA ID задачи")
@@ -161,7 +197,8 @@ class TaskManagerTUI:
         if title is None:
             return
         
-        self.tasks.append(Task(jira_id, title))
+        # Добавляем пустое описание - его можно будет заполнить позже
+        self.tasks.append(Task(jira_id, title, ""))
         self.save_tasks()
 
     def update_task(self):
@@ -191,8 +228,21 @@ class TaskManagerTUI:
             if os.path.exists(old_log_file):
                 os.rename(old_log_file, new_log_file)
         
-        self.tasks[self.selected_idx] = Task(new_jira_id, new_title)
+        self.tasks[self.selected_idx] = Task(new_jira_id, new_title, task.description)
         self.save_tasks()
+
+    def edit_description(self):
+        """Редактировать описание задачи во внешнем редакторе"""
+        if not self.tasks or self.selected_idx >= len(self.tasks):
+            return
+        
+        task = self.tasks[self.selected_idx]
+        new_description = self.edit_with_editor(task.description)
+        
+        if new_description is not None:
+            self.tasks[self.selected_idx] = Task(task.jira_id, task.title, new_description)
+            self.save_tasks()
+            self.description_scroll = 0  # Сбросить прокрутку
 
     def delete_task(self):
         """Удалить выбранную задачу"""
@@ -333,7 +383,7 @@ class TaskManagerTUI:
         self.stdscr.addstr(0, (w - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
         
         # Подсказки
-        help_text = "↑/↓: Навигация | Enter: Выбрать | Ctrl+N: Добавить | Ctrl+D: Удалить | Esc: Назад"
+        help_text = "↑/↓: Навигация | Enter: Выбрать | Ctrl+N: Добавить/Редактировать | Ctrl+D: Удалить | Esc: Назад"
         self.stdscr.addstr(h-1, 0, help_text, curses.A_DIM)
         
         # Разделы
@@ -353,8 +403,29 @@ class TaskManagerTUI:
         
         # Отображение содержимого раздела
         if self.task_detail_section == 0:  # Описание
-            desc = f"Задача: {task.title}\n\nJIRA ID: {task.jira_id}"
-            self.stdscr.addstr(6, 2, desc, curses.color_pair(1))
+            # Индикатор редактирования
+            edit_hint = "Ctrl+N: Редактировать описание" if task.description else "Ctrl+N: Добавить описание"
+            self.stdscr.addstr(2, w - len(edit_hint) - 2, edit_hint, curses.A_DIM)
+            
+            if task.description:
+                # Разбиваем описание на строки с переносом
+                desc_lines = []
+                for line in task.description.split('\n'):
+                    desc_lines.extend(textwrap.wrap(line, width=w-4))
+                
+                # Прокрутка описания
+                max_scroll = max(0, len(desc_lines) - (h - 6))
+                self.description_scroll = min(self.description_scroll, max_scroll)
+                
+                # Отображаем видимую часть описания
+                start_line = self.description_scroll
+                end_line = min(start_line + (h - 6), len(desc_lines))
+                
+                for i, line in enumerate(desc_lines[start_line:end_line]):
+                    self.stdscr.addstr(6 + i, 2, line, curses.color_pair(1))
+            else:
+                no_desc = "Описание отсутствует. Нажмите Ctrl+N, чтобы добавить."
+                self.stdscr.addstr(6, (w - len(no_desc)) // 2, no_desc, curses.color_pair(2))
         
         elif self.task_detail_section == 1:  # Объекты
             for idx, obj in enumerate(objects):
@@ -438,6 +509,7 @@ class TaskManagerTUI:
                         self.task_detail_section = 0
                         self.object_idx = 0
                         self.log_idx = 0
+                        self.description_scroll = 0
                 elif key == 14:  # Ctrl+N - добавить
                     self.add_task()
                 elif key == 21:  # Ctrl+U - обновить
@@ -449,12 +521,24 @@ class TaskManagerTUI:
             elif self.mode == "task_detail":
                 # Навигация по разделам
                 if key == curses.KEY_UP:
-                    if self.task_detail_section > 0:
+                    if self.task_detail_section == 0 and self.description_scroll > 0:
+                        self.description_scroll -= 1
+                    elif self.task_detail_section > 0:
                         self.task_detail_section -= 1
                         self.object_idx = 0
                         self.log_idx = 0
                 elif key == curses.KEY_DOWN:
-                    if self.task_detail_section < 2:
+                    if self.task_detail_section == 0:
+                        # Проверяем, есть ли куда прокручивать
+                        task = self.tasks[self.selected_idx]
+                        if task.description:
+                            h, w = self.stdscr.getmaxyx()
+                            desc_lines = []
+                            for line in task.description.split('\n'):
+                                desc_lines.extend(textwrap.wrap(line, width=w-4))
+                            if self.description_scroll < len(desc_lines) - (h - 6):
+                                self.description_scroll += 1
+                    elif self.task_detail_section < 2:
                         self.task_detail_section += 1
                         self.object_idx = 0
                         self.log_idx = 0
@@ -484,9 +568,11 @@ class TaskManagerTUI:
                         # Просмотр логов
                         pass
                 
-                # Добавление
+                # Добавление/редактирование
                 elif key == 14:  # Ctrl+N
-                    if self.task_detail_section == 1:  # Добавить объект
+                    if self.task_detail_section == 0:  # Редактировать описание
+                        self.edit_description()
+                    elif self.task_detail_section == 1:  # Добавить объект
                         self.add_object(task.jira_id)
                     elif self.task_detail_section == 2:  # Добавить запись в лог
                         self.add_log_entry(task.jira_id)
