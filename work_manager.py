@@ -28,7 +28,7 @@ class TaskManagerTUI:
         self.selected_idx = 0
         self.top_idx = 0
         self.mode = "task_list"  # Или "task_detail"
-        self.task_detail_section = 0  # 0: описание, 1: объекты, 2: логи
+        self.task_detail_section = 0  # 0: описание, 1: объекты, 2: logs
         self.object_idx = 0
         self.log_idx = 0
         self.description_scroll = 0
@@ -383,7 +383,7 @@ class TaskManagerTUI:
         self.stdscr.addstr(0, (w - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
         
         # Подсказки
-        help_text = "↑/↓: Навигация | Enter: Выбрать | Ctrl+N: Добавить/Редактировать | Ctrl+D: Удалить | Esc: Назад"
+        help_text = "←/→: Разделы | ↑/↓: Навигация | Enter: Выбрать | Ctrl+N/U: Редактировать | Ctrl+D: Удалить | Esc: Назад"
         self.stdscr.addstr(h-1, 0, help_text, curses.A_DIM)
         
         # Разделы
@@ -404,7 +404,7 @@ class TaskManagerTUI:
         # Отображение содержимого раздела
         if self.task_detail_section == 0:  # Описание
             # Индикатор редактирования
-            edit_hint = "Ctrl+N: Редактировать описание" if task.description else "Ctrl+N: Добавить описание"
+            edit_hint = "Ctrl+N/U: Редактировать описание" if task.description else "Ctrl+N/U: Добавить описание"
             self.stdscr.addstr(2, w - len(edit_hint) - 2, edit_hint, curses.A_DIM)
             
             if task.description:
@@ -413,18 +413,29 @@ class TaskManagerTUI:
                 for line in task.description.split('\n'):
                     desc_lines.extend(textwrap.wrap(line, width=w-4))
                 
+                # Рассчитываем доступное пространство (учитываем заголовки и подсказки)
+                available_height = max(0, h - 6)  # 6 строк занято заголовками и разделами
+                
                 # Прокрутка описания
-                max_scroll = max(0, len(desc_lines) - (h - 6))
+                max_scroll = max(0, len(desc_lines) - available_height)
                 self.description_scroll = min(self.description_scroll, max_scroll)
                 
                 # Отображаем видимую часть описания
                 start_line = self.description_scroll
-                end_line = min(start_line + (h - 6), len(desc_lines))
+                end_line = min(start_line + available_height, len(desc_lines))
                 
                 for i, line in enumerate(desc_lines[start_line:end_line]):
-                    self.stdscr.addstr(6 + i, 2, line, curses.color_pair(1))
+                    if 6 + i < h - 1:  # Не заходить на подсказку
+                        self.stdscr.addstr(6 + i, 2, line, curses.color_pair(1))
+                
+                # Индикаторы прокрутки
+                if max_scroll > 0:
+                    if self.description_scroll > 0:
+                        self.stdscr.addstr(6, w-2, "↑", curses.A_BOLD)
+                    if self.description_scroll < max_scroll:
+                        self.stdscr.addstr(min(6 + available_height - 1, h-2), w-2, "↓", curses.A_BOLD)
             else:
-                no_desc = "Описание отсутствует. Нажмите Ctrl+N, чтобы добавить."
+                no_desc = "Описание отсутствует. Нажмите Ctrl+N или Ctrl+U, чтобы добавить."
                 self.stdscr.addstr(6, (w - len(no_desc)) // 2, no_desc, curses.color_pair(2))
         
         elif self.task_detail_section == 1:  # Объекты
@@ -519,44 +530,49 @@ class TaskManagerTUI:
             
             # Режим деталей задачи
             elif self.mode == "task_detail":
-                # Навигация по разделам
-                if key == curses.KEY_UP:
-                    if self.task_detail_section == 0 and self.description_scroll > 0:
-                        self.description_scroll -= 1
-                    elif self.task_detail_section > 0:
+                # Навигация между разделами
+                if key == curses.KEY_LEFT:
+                    if self.task_detail_section > 0:
                         self.task_detail_section -= 1
+                        # Сброс позиций при переключении раздела
                         self.object_idx = 0
                         self.log_idx = 0
-                elif key == curses.KEY_DOWN:
-                    if self.task_detail_section == 0:
-                        # Проверяем, есть ли куда прокручивать
+                        self.description_scroll = 0
+                elif key == curses.KEY_RIGHT:
+                    if self.task_detail_section < 2:
+                        self.task_detail_section += 1
+                        self.object_idx = 0
+                        self.log_idx = 0
+                        self.description_scroll = 0
+                
+                # Навигация внутри текущего раздела
+                if self.task_detail_section == 0:  # Описание
+                    if key == curses.KEY_UP and self.description_scroll > 0:
+                        self.description_scroll -= 1
+                    elif key == curses.KEY_DOWN:
                         task = self.tasks[self.selected_idx]
                         if task.description:
                             h, w = self.stdscr.getmaxyx()
                             desc_lines = []
                             for line in task.description.split('\n'):
                                 desc_lines.extend(textwrap.wrap(line, width=w-4))
-                            if self.description_scroll < len(desc_lines) - (h - 6):
+                            available_height = max(0, h - 6)
+                            max_scroll = max(0, len(desc_lines) - available_height)
+                            if self.description_scroll < max_scroll:
                                 self.description_scroll += 1
-                    elif self.task_detail_section < 2:
-                        self.task_detail_section += 1
-                        self.object_idx = 0
-                        self.log_idx = 0
                 
-                # Навигация внутри раздела
-                task = self.tasks[self.selected_idx]
-                objects = self.load_objects(task.jira_id)
-                logs = self.load_logs(task.jira_id)
-                
-                if key == curses.KEY_UP:
-                    if self.task_detail_section == 1 and self.object_idx > 0:
+                elif self.task_detail_section == 1:  # Объекты
+                    objects = self.load_objects(self.tasks[self.selected_idx].jira_id)
+                    if key == curses.KEY_UP and self.object_idx > 0:
                         self.object_idx -= 1
-                    elif self.task_detail_section == 2 and self.log_idx > 0:
-                        self.log_idx -= 1
-                elif key == curses.KEY_DOWN:
-                    if self.task_detail_section == 1 and self.object_idx < len(objects) - 1:
+                    elif key == curses.KEY_DOWN and self.object_idx < len(objects) - 1:
                         self.object_idx += 1
-                    elif self.task_detail_section == 2 and self.log_idx < len(logs) - 1:
+                
+                elif self.task_detail_section == 2:  # Логи
+                    logs = self.load_logs(self.tasks[self.selected_idx].jira_id)
+                    if key == curses.KEY_UP and self.log_idx > 0:
+                        self.log_idx -= 1
+                    elif key == curses.KEY_DOWN and self.log_idx < len(logs) - 1:
                         self.log_idx += 1
                 
                 # Выбор раздела/действия
@@ -573,14 +589,16 @@ class TaskManagerTUI:
                     if self.task_detail_section == 0:  # Редактировать описание
                         self.edit_description()
                     elif self.task_detail_section == 1:  # Добавить объект
-                        self.add_object(task.jira_id)
+                        self.add_object(self.tasks[self.selected_idx].jira_id)
                     elif self.task_detail_section == 2:  # Добавить запись в лог
-                        self.add_log_entry(task.jira_id)
+                        self.add_log_entry(self.tasks[self.selected_idx].jira_id)
+                elif key == 21 and self.task_detail_section == 0:  # Ctrl+U: Редактировать описание
+                    self.edit_description()
                 
                 # Удаление
                 elif key == 4:  # Ctrl+D
                     if self.task_detail_section == 1:  # Удалить объект
-                        self.delete_object(task.jira_id)
+                        self.delete_object(self.tasks[self.selected_idx].jira_id)
                     elif self.task_detail_section == 2:  # Удалить лог
                         # Реализация удаления лога
                         pass
