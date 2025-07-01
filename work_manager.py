@@ -327,6 +327,8 @@ class TaskManagerTUI:
             help_text = "Enter: Выбрать | Esc: Отмена"
             win.addstr(win_height - 1, (win_width - len(help_text)) // 2, help_text, curses.A_DIM)
             
+            win.refresh()  # Важно: обновляем окно перед получением ввода
+            
             key = win.getch()
             
             if key == curses.KEY_UP:
