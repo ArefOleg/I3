@@ -114,7 +114,8 @@ class TaskManager:
         # Получаем текущее описание
         c = self.conn.cursor()
         c.execute("SELECT description FROM tasks WHERE id = ?", (task_id,))
-        description = c.fetchone()[0] or ""
+        result = c.fetchone()
+        description = result[0] if result else ""
 
         # Создаем окно для редактирования
         edit_win = curses.newwin(curses.LINES - 1, curses.COLS, 0, 0)
@@ -124,7 +125,8 @@ class TaskManager:
         
         # Создаем текстовое поле
         text_win = curses.newwin(curses.LINES - 2, curses.COLS - 1, 1, 0)
-        text_win.addstr(description)
+        if description:
+            text_win.addstr(description)
         text_win.refresh()
         
         # Включаем режим редактирования
@@ -137,23 +139,31 @@ class TaskManager:
         # Сохраняем изменения
         c.execute("UPDATE tasks SET description = ? WHERE id = ?", (edited_text, task_id))
         self.conn.commit()
+        
+        # Обновляем данные в текущем представлении
+        return edited_text
 
     def view_task_details(self, task_idx):
-        if task_idx < 0 or task_idx >= len(self.tasks):
+        # Загружаем текущие данные задачи
+        c = self.conn.cursor()
+        c.execute("SELECT id, name, created_date, description FROM tasks WHERE id = ?", 
+                  (self.tasks[task_idx][0],))
+        task = c.fetchone()
+        
+        if not task:
             return
             
-        task = self.tasks[task_idx]
         task_id, name, created_date, description = task
-        
-        # Форматируем дату
-        try:
-            dt = datetime.datetime.strptime(created_date, "%Y-%m-%d %H:%M:%S")
-            display_date = dt.strftime("%d.%m.%Y %H:%M")
-        except:
-            display_date = created_date
         
         # Режим детального просмотра
         while True:
+            # Форматируем дату
+            try:
+                dt = datetime.datetime.strptime(created_date, "%Y-%m-%d %H:%M:%S")
+                display_date = dt.strftime("%d.%m.%Y %H:%M")
+            except:
+                display_date = created_date
+            
             self.stdscr.clear()
             height, width = self.stdscr.getmaxyx()
             
@@ -175,8 +185,19 @@ class TaskManager:
                 y = 7
                 for line in description.split('\n'):
                     if y < height - 2 and line.strip():
-                        self.stdscr.addstr(y, 0, line)
-                        y += 1
+                        # Обрезаем строку, если она слишком длинная
+                        # (чтобы не вылезать за пределы экрана)
+                        while len(line) > width:
+                            self.stdscr.addstr(y, 0, line[:width])
+                            line = line[width:]
+                            y += 1
+                            if y >= height - 2:
+                                break
+                        if y < height - 1:
+                            self.stdscr.addstr(y, 0, line)
+                            y += 1
+                        if y >= height - 2:
+                            break
             else:
                 self.stdscr.addstr(7, 0, "No description available")
             
@@ -191,10 +212,11 @@ class TaskManager:
             if key == ord('q'):
                 break
             elif key == 15:  # Ctrl+O
-                self.edit_description(task_id)
-                # Обновляем данные задачи
+                # Редактируем описание и сразу обновляем переменную
+                new_description = self.edit_description(task_id)
+                description = new_description
+                # Обновляем список задач для главного экрана
                 self.load_tasks()
-                task = self.tasks[task_idx]
 
     def show_message(self, msg):
         self.stdscr.move(curses.LINES - 1, 0)
