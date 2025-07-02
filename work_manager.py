@@ -7,13 +7,24 @@ import curses.textpad
 def init_db():
     conn = sqlite3.connect('tasks.db')
     c = conn.cursor()
+    
+    # Таблица задач
     c.execute('''CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 created_date TEXT NOT NULL,
                 description TEXT)''')
     
-    # Проверяем существование колонки description
+    # Таблица объектов
+    c.execute('''CREATE TABLE IF NOT EXISTS task_objects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                object_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                created_date TEXT NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES tasks(id))''')
+    
+    # Проверяем существование колонок
     c.execute("PRAGMA table_info(tasks)")
     columns = [col[1] for col in c.fetchall()]
     if 'description' not in columns:
@@ -143,6 +154,229 @@ class TaskManager:
         # Обновляем данные в текущем представлении
         return edited_text
 
+    def add_object(self, task_id):
+        # Типы объектов
+        object_types = [
+            "SQL",
+            "Applet",
+            "Application",
+            "Business Component",
+            "Business Object",
+            "Business Service",
+            "Integration Object",
+            "Link",
+            "Job",
+            "Outbound Web Service",
+            "Inbound Web Service",
+            "Pick List",
+            "Task",
+            "Table",
+            "Screen",
+            "View",
+            "Workflow Process",
+            "Workflow Policy",
+            "Product"
+        ]
+        
+        selected_type = 0
+        
+        # Выбор типа объекта
+        while True:
+            self.stdscr.clear()
+            height, width = self.stdscr.getmaxyx()
+            
+            self.stdscr.addstr(0, 0, f"Select Object Type for Task: {task_id}")
+            self.stdscr.addstr(1, 0, "-" * width)
+            
+            # Отображаем типы объектов
+            for i, obj_type in enumerate(object_types):
+                if i == selected_type:
+                    self.stdscr.attron(curses.A_REVERSE)
+                self.stdscr.addstr(2 + i, 2, obj_type)
+                if i == selected_type:
+                    self.stdscr.attroff(curses.A_REVERSE)
+            
+            # Подсказки
+            footer = "Enter:Select  ↑/↓:Navigate  q:Cancel"
+            self.stdscr.addstr(height - 1, 0, footer[:width-1])
+            self.stdscr.refresh()
+            
+            # Обработка ввода
+            key = self.stdscr.getch()
+            
+            if key == ord('q'):
+                return
+            elif key == curses.KEY_UP:
+                if selected_type > 0:
+                    selected_type -= 1
+            elif key == curses.KEY_DOWN:
+                if selected_type < len(object_types) - 1:
+                    selected_type += 1
+            elif key == 10:  # Enter
+                break
+        
+        # Получили выбранный тип
+        obj_type = object_types[selected_type]
+        
+        # Редактирование описания объекта
+        created_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Создаем окно для редактирования
+        edit_win = curses.newwin(curses.LINES - 1, curses.COLS, 0, 0)
+        edit_win.clear()
+        edit_win.addstr(0, 0, f"Edit description for {obj_type} (Ctrl+G to save, Ctrl+C to cancel):")
+        edit_win.refresh()
+        
+        # Создаем текстовое поле
+        text_win = curses.newwin(curses.LINES - 2, curses.COLS - 1, 1, 0)
+        text_win.refresh()
+        
+        # Включаем режим редактирования
+        textbox = curses.textpad.Textbox(text_win)
+        textbox.edit()
+        
+        # Получаем отредактированный текст
+        description = textbox.gather().strip()
+        
+        if description:
+            # Сохраняем объект
+            c = self.conn.cursor()
+            try:
+                c.execute("INSERT INTO task_objects (task_id, object_type, description, created_date) VALUES (?, ?, ?, ?)", 
+                          (task_id, obj_type, description, created_date))
+                self.conn.commit()
+                self.show_message(f"Added {obj_type} to task! Press any key.")
+                self.stdscr.getch()
+            except sqlite3.Error as e:
+                self.show_message(f"Error: {str(e)}. Press any key.")
+                self.stdscr.getch()
+
+    def show_list_objects(self, task_id):
+        # Получаем объекты для задачи
+        c = self.conn.cursor()
+        c.execute("SELECT object_type, created_date, description FROM task_objects WHERE task_id = ? ORDER BY created_date DESC", 
+                  (task_id,))
+        objects = c.fetchall()
+        
+        if not objects:
+            self.show_message("No objects found for this task. Press any key.")
+            self.stdscr.getch()
+            return
+        
+        # Отображаем список объектов
+        current_idx = 0
+        start_idx = 0
+        page_size = curses.LINES - 3
+        
+        while True:
+            self.stdscr.clear()
+            height, width = self.stdscr.getmaxyx()
+            
+            self.stdscr.addstr(0, 0, f"Objects for Task: {task_id}")
+            self.stdscr.addstr(1, 0, "-" * width)
+            
+            # Отображаем объекты
+            for i, obj in enumerate(objects[start_idx:start_idx+page_size]):
+                obj_type, created_date, description = obj
+                
+                # Форматируем дату
+                try:
+                    dt = datetime.datetime.strptime(created_date, "%Y-%m-%d %H:%M:%S")
+                    display_date = dt.strftime("%d.%m.%Y %H:%M")
+                except:
+                    display_date = created_date
+                
+                # Выделение текущего объекта
+                if i + start_idx == current_idx:
+                    self.stdscr.attron(curses.A_REVERSE)
+                
+                # Отображаем информацию
+                self.stdscr.addstr(2 + i, 0, f"{obj_type} ({display_date})")
+                
+                # Отображаем начало описания
+                short_desc = description.split('\n')[0][:width-30] + "..." if description else "No description"
+                self.stdscr.addstr(2 + i, 30, short_desc)
+                
+                if i + start_idx == current_idx:
+                    self.stdscr.attroff(curses.A_REVERSE)
+            
+            # Подсказки
+            footer = "q:Back  ↑/↓:Navigate  Enter:View Details"
+            self.stdscr.addstr(height - 1, 0, footer[:width-1])
+            self.stdscr.refresh()
+            
+            # Обработка ввода
+            key = self.stdscr.getch()
+            
+            if key == ord('q'):
+                break
+            elif key == curses.KEY_UP:
+                if current_idx > 0:
+                    current_idx -= 1
+                    if current_idx < start_idx:
+                        start_idx = current_idx
+            elif key == curses.KEY_DOWN:
+                if current_idx < len(objects) - 1:
+                    current_idx += 1
+                    if current_idx >= start_idx + page_size:
+                        start_idx += 1
+            elif key == 10:  # Enter
+                # Показываем детали объекта
+                obj = objects[current_idx]
+                self.show_object_details(task_id, obj)
+
+    def show_object_details(self, task_id, obj):
+        obj_type, created_date, description = obj
+        
+        # Форматируем дату
+        try:
+            dt = datetime.datetime.strptime(created_date, "%Y-%m-%d %H:%M:%S")
+            display_date = dt.strftime("%d.%m.%Y %H:%M")
+        except:
+            display_date = created_date
+        
+        while True:
+            self.stdscr.clear()
+            height, width = self.stdscr.getmaxyx()
+            
+            # Заголовок
+            self.stdscr.addstr(0, 0, f"Object Details: {obj_type} (Task: {task_id})")
+            self.stdscr.addstr(1, 0, f"Created: {display_date}")
+            self.stdscr.addstr(2, 0, "-" * width)
+            
+            # Описание объекта
+            self.stdscr.addstr(3, 0, "Description:")
+            if description:
+                # Отображаем описание с переносами
+                y = 4
+                for line in description.split('\n'):
+                    if y < height - 2 and line.strip():
+                        # Обрезаем строку, если она слишком длинная
+                        while len(line) > width:
+                            self.stdscr.addstr(y, 0, line[:width])
+                            line = line[width:]
+                            y += 1
+                            if y >= height - 2:
+                                break
+                        if y < height - 1:
+                            self.stdscr.addstr(y, 0, line)
+                            y += 1
+                        if y >= height - 2:
+                            break
+            else:
+                self.stdscr.addstr(4, 0, "No description available")
+            
+            # Подсказки
+            footer = "q:Back"
+            self.stdscr.addstr(height - 1, 0, footer[:width-1])
+            self.stdscr.refresh()
+            
+            # Обработка ввода
+            key = self.stdscr.getch()
+            
+            if key == ord('q'):
+                break
+
     def view_task_details(self, task_idx):
         # Загружаем текущие данные задачи
         c = self.conn.cursor()
@@ -198,7 +432,6 @@ class TaskManager:
                 for line in description.split('\n'):
                     if y < height - 2 and line.strip():
                         # Обрезаем строку, если она слишком длинная
-                        # (чтобы не вылезать за пределы экрана)
                         while len(line) > width:
                             self.stdscr.addstr(y, 0, line[:width])
                             line = line[width:]
@@ -232,11 +465,9 @@ class TaskManager:
             elif key == 10:  # Enter
                 # Обработка выбранной опции
                 if selected_option == 0:  # Add Objects
-                    self.show_message("Add Objects functionality will be here")
-                    self.stdscr.getch()
+                    self.add_object(task_id)
                 elif selected_option == 1:  # Show List Objects
-                    self.show_message("Show List Objects functionality will be here")
-                    self.stdscr.getch()
+                    self.show_list_objects(task_id)
                 elif selected_option == 2:  # Development Log
                     self.show_message("Development Log functionality will be here")
                     self.stdscr.getch()
