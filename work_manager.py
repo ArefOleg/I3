@@ -1,761 +1,275 @@
 #!/usr/bin/env python3
-import json
-import os
+import sqlite3
+import datetime
 import curses
-import textwrap
-import subprocess
-import tempfile
-from datetime import datetime
-from curses import wrapper
-from collections import namedtuple
+import curses.textpad
 
-# Конфигурация
-TASKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.json")
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task_logs")
-os.makedirs(LOG_DIR, exist_ok=True)
+def init_db():
+    conn = sqlite3.connect('tasks.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_date TEXT NOT NULL,
+                description TEXT)''')
+    
+    # Проверяем существование колонки description
+    c.execute("PRAGMA table_info(tasks)")
+    columns = [col[1] for col in c.fetchall()]
+    if 'description' not in columns:
+        c.execute("ALTER TABLE tasks ADD COLUMN description TEXT")
+    
+    conn.commit()
+    return conn
 
-# Минимальные размеры окна
-MIN_HEIGHT = 15
-MIN_WIDTH = 80
-
-# Список типов объектов
-OBJECT_TYPES = [
-    "SQL",
-    "Applet",
-    "Application",
-    "Business Component",
-    "Business Object",
-    "Business Service",
-    "Integration Object",
-    "Link",
-    "Job",
-    "Outbound Web Service",
-    "Inbound Web Service",
-    "Pick List",
-    "Task",
-    "Table",
-    "Screen",
-    "View",
-    "Workflow Process",
-    "Workflow Policy",
-    "Product"
-]
-
-# Структура задачи
-Task = namedtuple("Task", ["jira_id", "title", "description"])
-
-class TaskManagerTUI:
+class TaskManager:
     def __init__(self, stdscr):
         self.stdscr = stdscr
+        self.conn = init_db()
         self.tasks = []
         self.selected_idx = 0
-        self.top_idx = 0
-        self.mode = "task_list"  # Или "task_detail"
-        self.task_detail_section = 0  # 0: описание, 1: объекты, 2: logs
-        self.object_idx = 0
-        self.log_idx = 0
-        self.description_scroll = 0
         self.load_tasks()
-        self.init_curses()
-        self.run()
-
-    def init_curses(self):
-        # Настройка цветов
-        curses.start_color()
-        curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)     # Информация
-        curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)    # Предупреждение
-        curses.init_pair(3, curses.COLOR_CYAN, curses.COLOR_BLACK)      # Заголовки
-        curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_WHITE)     # Выделение
-        curses.init_pair(5, curses.COLOR_MAGENTA, curses.COLOR_BLACK)   # Объекты
-        curses.init_pair(6, curses.COLOR_BLUE, curses.COLOR_BLACK)      # Логи
         
-        # Оптимизация ввода
-        self.stdscr.keypad(True)
-        curses.cbreak()
-        curses.noecho()
-        curses.curs_set(0)  # Скрыть курсор
-
-    def check_window_size(self):
-        """Проверить размер окна"""
-        h, w = self.stdscr.getmaxyx()
-        return h >= MIN_HEIGHT and w >= MIN_WIDTH
-
     def load_tasks(self):
-        """Загрузить задачи из файла"""
-        self.tasks = []
-        if not os.path.exists(TASKS_FILE):
-            return
+        c = self.conn.cursor()
+        c.execute("SELECT id, name, created_date, description FROM tasks ORDER BY datetime(created_date) DESC")
+        self.tasks = c.fetchall()
         
-        try:
-            with open(TASKS_FILE, "r") as f:
-                data = json.load(f)
-                for task in data:
-                    # Обеспечим обратную совместимость со старыми задачами
-                    if "description" not in task:
-                        task["description"] = ""
-                    self.tasks.append(Task(task["jira_id"], task["title"], task["description"]))
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    def save_tasks(self):
-        """Сохранить задачи в файл"""
-        with open(TASKS_FILE, "w") as f:
-            tasks_data = [{
-                "jira_id": t.jira_id, 
-                "title": t.title,
-                "description": t.description
-            } for t in self.tasks]
-            json.dump(tasks_data, f, indent=2)
-
-    def load_objects(self, jira_id):
-        """Загрузить объекты для задачи"""
-        file_path = os.path.join(LOG_DIR, f"{jira_id}_objects.json")
-        if not os.path.exists(file_path):
-            return []
-        
-        try:
-            with open(file_path, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, TypeError):
-            return []
-
-    def save_objects(self, jira_id, objects):
-        """Сохранить объекты для задачи"""
-        file_path = os.path.join(LOG_DIR, f"{jira_id}_objects.json")
-        with open(file_path, "w") as f:
-            json.dump(objects, f, indent=2)
-
-    def load_logs(self, jira_id):
-        """Загрузить логи для задачи"""
-        file_path = os.path.join(LOG_DIR, f"{jira_id}_logs.json")
-        if not os.path.exists(file_path):
-            return []
-        
-        try:
-            with open(file_path, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, TypeError):
-            return []
-
-    def save_logs(self, jira_id, logs):
-        """Сохранить логи для задачи"""
-        file_path = os.path.join(LOG_DIR, f"{jira_id}_logs.json")
-        with open(file_path, "w") as f:
-            json.dump(logs, f, indent=2)
-
-    def input_dialog(self, title, default=""):
-        """Диалог ввода текста"""
-        h, w = self.stdscr.getmaxyx()
-        
-        # Создать окно диалога
-        win = curses.newwin(3, 50, h//2, (w-50)//2)
-        win.border()
-        win.addstr(0, 2, f" {title} ")
-        win.refresh()
-        
-        curses.echo()
+    def create_task(self):
+        # Запрос ID
+        self.show_message("Enter task ID (any characters): ")
         curses.curs_set(1)
+        self.stdscr.move(curses.LINES - 1, len("Enter task ID (any characters): "))
+        curses.echo()
+        task_id = self.stdscr.getstr().decode('utf-8').strip()
+        curses.noecho()
         
-        input_str = default
-        win.addstr(1, 1, input_str)
-        win.refresh()
-        
-        while True:
-            try:
-                ch = win.getch()
-            except:
-                continue
-                
-            if ch == 10:  # Enter
-                break
-            elif ch == 27:  # ESC
-                input_str = None
-                break
-            elif ch == curses.KEY_BACKSPACE or ch == 127:
-                input_str = input_str[:-1]
-            elif ch >= 32 and ch <= 126:  # Печатаемые символы
-                input_str += chr(ch)
+        if not task_id:
+            curses.curs_set(0)
+            return
             
-            win.move(1, 1)
-            win.clrtoeol()
-            win.addstr(1, 1, input_str)
-            win.refresh()
-        
+        # Проверка уникальности ID
+        if any(task[0] == task_id for task in self.tasks):
+            self.show_message(f"ID '{task_id}' already exists! Press any key.")
+            self.stdscr.getch()
+            curses.curs_set(0)
+            return
+
+        # Запрос названия задачи
+        self.show_message("Enter task name: ")
+        self.stdscr.move(curses.LINES - 1, len("Enter task name: "))
+        curses.echo()
+        name = self.stdscr.getstr().decode('utf-8').strip()
         curses.noecho()
         curses.curs_set(0)
-        return input_str
-
-    def edit_with_editor(self, content):
-        """Редактирование текста во внешнем редакторе Lite-XL"""
-        # Создаем временный файл
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
-            tmp_path = tmp.name
-            if content:
-                tmp.write(content.encode('utf-8'))
-                tmp.flush()
         
-        # Запускаем редактор
-        try:
-            subprocess.run(["lite-xl", tmp_path], check=True)
-        except subprocess.CalledProcessError:
-            return None
-        
-        # Читаем результат
-        try:
-            with open(tmp_path, "r") as f:
-                return f.read()
-        except IOError:
-            return None
-        finally:
-            # Удаляем временный файл
-            os.unlink(tmp_path)
-
-    def add_task(self):
-        """Добавить новую задачу"""
-        jira_id = self.input_dialog("JIRA ID задачи")
-        if jira_id is None or not jira_id.strip():
-            return
-        
-        title = self.input_dialog("Название задачи")
-        if title is None:
-            return
-        
-        # Добавляем пустое описание - его можно будет заполнить позже
-        self.tasks.append(Task(jira_id, title, ""))
-        self.save_tasks()
+        if name:
+            created_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            c = self.conn.cursor()
+            try:
+                c.execute("INSERT INTO tasks (id, name, created_date, description) VALUES (?, ?, ?, ?)", 
+                         (task_id, name, created_date, ""))
+                self.conn.commit()
+                self.load_tasks()
+                self.selected_idx = 0
+            except sqlite3.Error as e:
+                self.show_message(f"Error: {str(e)}. Press any key.")
+                self.stdscr.getch()
 
     def update_task(self):
-        """Обновить выбранную задачу"""
-        if not self.tasks or self.selected_idx >= len(self.tasks):
+        if not self.tasks:
             return
-        
-        task = self.tasks[self.selected_idx]
-        
-        new_jira_id = self.input_dialog("JIRA ID задачи", task.jira_id)
-        if new_jira_id is None:
-            return
-        
-        new_title = self.input_dialog("Название задачи", task.title)
-        if new_title is None:
-            return
-        
-        # Обновить имя файлов логов при изменении JIRA ID
-        if new_jira_id != task.jira_id:
-            old_obj_file = os.path.join(LOG_DIR, f"{task.jira_id}_objects.json")
-            new_obj_file = os.path.join(LOG_DIR, f"{new_jira_id}_objects.json")
-            old_log_file = os.path.join(LOG_DIR, f"{task.jira_id}_logs.json")
-            new_log_file = os.path.join(LOG_DIR, f"{new_jira_id}_logs.json")
             
-            if os.path.exists(old_obj_file):
-                os.rename(old_obj_file, new_obj_file)
-            if os.path.exists(old_log_file):
-                os.rename(old_log_file, new_log_file)
+        task_id = self.tasks[self.selected_idx][0]
+        self.show_message(f"Update task (current: {self.tasks[self.selected_idx][1]}): ")
+        curses.curs_set(1)
+        self.stdscr.move(curses.LINES - 1, len(f"Update task (current: {self.tasks[self.selected_idx][1]}): "))
+        curses.echo()
+        new_name = self.stdscr.getstr().decode('utf-8').strip()
+        curses.noecho()
+        curses.curs_set(0)
         
-        self.tasks[self.selected_idx] = Task(new_jira_id, new_title, task.description)
-        self.save_tasks()
-
-    def edit_description(self):
-        """Редактировать описание задачи во внешнем редакторе"""
-        if not self.tasks or self.selected_idx >= len(self.tasks):
-            return
-        
-        task = self.tasks[self.selected_idx]
-        new_description = self.edit_with_editor(task.description)
-        
-        if new_description is not None:
-            self.tasks[self.selected_idx] = Task(task.jira_id, task.title, new_description)
-            self.save_tasks()
-            self.description_scroll = 0  # Сбросить прокрутку
+        if new_name:
+            c = self.conn.cursor()
+            c.execute("UPDATE tasks SET name = ? WHERE id = ?", (new_name, task_id))
+            self.conn.commit()
+            self.load_tasks()
 
     def delete_task(self):
-        """Удалить выбранную задачу"""
-        if not self.tasks or self.selected_idx >= len(self.tasks):
-            return
-        
-        task = self.tasks[self.selected_idx]
-        
-        # Удалить связанные файлы
-        obj_file = os.path.join(LOG_DIR, f"{task.jira_id}_objects.json")
-        log_file = os.path.join(LOG_DIR, f"{task.jira_id}_logs.json")
-        
-        if os.path.exists(obj_file):
-            os.remove(obj_file)
-        if os.path.exists(log_file):
-            os.remove(log_file)
-        
-        del self.tasks[self.selected_idx]
-        
-        # Обновить индекс выбранной задачи
-        if self.selected_idx >= len(self.tasks) and self.tasks:
-            self.selected_idx = len(self.tasks) - 1
-        elif not self.tasks:
-            self.selected_idx = 0
-            
-        self.save_tasks()
-
-    def show_object_type_menu(self):
-        """Показать меню выбора типа объекта"""
-        h, w = self.stdscr.getmaxyx()
-        win_height = min(len(OBJECT_TYPES) + 4, h - 4)
-        win_width = 40
-        win = curses.newwin(win_height, win_width, (h - win_height) // 2, (w - win_width) // 2)
-        win.border()
-        win.keypad(True)
-        
-        title = " Выберите тип объекта "
-        win.addstr(0, (win_width - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
-        
-        selected_idx = 0
-        top_idx = 0
-        
-        while True:
-            win.clear()
-            win.border()
-            win.addstr(0, (win_width - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
-            
-            # Отображение доступных типов объектов
-            for idx in range(top_idx, min(top_idx + win_height - 4, len(OBJECT_TYPES))):
-                obj_type = OBJECT_TYPES[idx]
-                y_pos = idx - top_idx + 1
-                
-                if idx == selected_idx:
-                    win.addstr(y_pos, 2, "> " + obj_type, curses.color_pair(4))
-                else:
-                    win.addstr(y_pos, 2, "  " + obj_type)
-            
-            # Подсказка
-            help_text = "Enter: Выбрать | Esc: Отмена"
-            win.addstr(win_height - 1, (win_width - len(help_text)) // 2, help_text, curses.A_DIM)
-            
-            win.refresh()  # Важно: обновляем окно перед получением ввода
-            
-            key = win.getch()
-            
-            if key == curses.KEY_UP:
-                if selected_idx > 0:
-                    selected_idx -= 1
-                    if selected_idx < top_idx:
-                        top_idx = selected_idx
-            elif key == curses.KEY_DOWN:
-                if selected_idx < len(OBJECT_TYPES) - 1:
-                    selected_idx += 1
-                    if selected_idx >= top_idx + win_height - 4:
-                        top_idx += 1
-            elif key == curses.KEY_PPAGE:
-                selected_idx = max(0, selected_idx - (win_height - 4))
-                top_idx = selected_idx
-            elif key == curses.KEY_NPAGE:
-                selected_idx = min(len(OBJECT_TYPES) - 1, selected_idx + (win_height - 4))
-                top_idx = max(0, selected_idx - (win_height - 5))
-            elif key == 10:  # Enter
-                return OBJECT_TYPES[selected_idx]
-            elif key == 27:  # ESC
-                return None
-        
-        return None
-
-    def add_object(self, jira_id):
-        """Добавить новый объект"""
-        # Выбор типа объекта
-        obj_type = self.show_object_type_menu()
-        if obj_type is None:
-            return
-        
-        # Ввод имени объекта
-        obj_name = self.input_dialog(f"Имя объекта ({obj_type})")
-        if obj_name is None or not obj_name.strip():
-            return
-        
-        # Ввод описания объекта
-        obj_description = self.input_dialog(f"Описание объекта ({obj_type})", default="")
-        if obj_description is None:
-            obj_description = ""
-        
-        # Добавление объекта
-        objects = self.load_objects(jira_id)
-        objects.append({
-            "type": obj_type,
-            "name": obj_name,
-            "description": obj_description
-        })
-        self.save_objects(jira_id, objects)
-
-    def edit_object(self, jira_id):
-        """Редактировать существующий объект"""
-        objects = self.load_objects(jira_id)
-        if not objects or self.object_idx >= len(objects):
-            return
-        
-        obj = objects[self.object_idx]
-        
-        # Редактирование имени
-        new_name = self.input_dialog("Имя объекта", obj["name"])
-        if new_name is None:
-            return
-        
-        # Редактирование описания
-        new_desc = self.input_dialog("Описание объекта", obj["description"])
-        if new_desc is None:
-            return
-        
-        # Обновление объекта
-        objects[self.object_idx] = {
-            "type": obj["type"],
-            "name": new_name,
-            "description": new_desc
-        }
-        self.save_objects(jira_id, objects)
-
-    def delete_object(self, jira_id):
-        """Удалить выбранный объект"""
-        objects = self.load_objects(jira_id)
-        if not objects or self.object_idx >= len(objects):
-            return
-        
-        del objects[self.object_idx]
-        
-        # Обновить индекс выбранного объекта
-        if self.object_idx >= len(objects) and objects:
-            self.object_idx = len(objects) - 1
-        elif not objects:
-            self.object_idx = 0
-            
-        self.save_objects(jira_id, objects)
-
-    def add_log_entry(self, jira_id):
-        """Добавить запись в лог"""
-        log_text = self.input_dialog("Запись в лог")
-        if log_text is None or not log_text.strip():
-            return
-        
-        logs = self.load_logs(jira_id)
-        today = datetime.now().strftime("%Y-%m-%d")
-        
-        # Найти или создать запись для сегодняшнего дня
-        today_log = next((log for log in logs if log["date"] == today), None)
-        if not today_log:
-            today_log = {"date": today, "entries": []}
-            logs.append(today_log)
-        
-        today_log["entries"].append(log_text)
-        self.save_logs(jira_id, logs)
-
-    def draw_task_list(self):
-        """Отрисовать список задач"""
-        self.stdscr.clear()
-        h, w = self.stdscr.getmaxyx()
-        
-        # Проверить размер окна
-        if not self.check_window_size():
-            msg = f"Минимальный размер: {MIN_WIDTH}x{MIN_HEIGHT}"
-            self.stdscr.addstr(0, 0, msg, curses.A_BOLD)
-            self.stdscr.refresh()
-            return
-            
-        # Заголовок
-        title = " Arch Linux Task Manager "
-        self.stdscr.addstr(0, (w - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
-        
-        # Подсказки
-        help_text = "↑/↓: Навигация | Ctrl+N: Добавить | Ctrl+U: Обновить | Ctrl+D: Удалить | Enter: Детали | q: Выход"
-        self.stdscr.addstr(h-1, 0, help_text, curses.A_DIM)
-        
-        # Заголовки таблицы
-        if self.tasks:
-            header = f"{'#':<4} {'JIRA ID':<15} {'Название задачи':<50}"
-            self.stdscr.addstr(2, 2, header, curses.A_BOLD)
-        
-        # Список задач
-        for idx, task in enumerate(self.tasks[self.top_idx:]):
-            line_idx = idx + self.top_idx
-            if 3 + idx >= h - 1:  # Не помещается на экран
-                break
-                
-            # Подсветка выбранной строки
-            if line_idx == self.selected_idx:
-                self.stdscr.addstr(3 + idx, 0, " " * w, curses.color_pair(4))
-            
-            # Отображение задачи
-            task_line = f"{line_idx+1:<4} {task.jira_id:<15} {task.title[:50]:<50}"
-            self.stdscr.addstr(3 + idx, 2, task_line)
-        
-        # Показать индикатор прокрутки
-        if self.top_idx > 0:
-            self.stdscr.addstr(3, w-2, "↑", curses.A_BOLD)
-        if len(self.tasks) > self.top_idx + (h - 4):
-            self.stdscr.addstr(h-2, w-2, "↓", curses.A_BOLD)
-        
-        # Сообщение, если задач нет
         if not self.tasks:
-            no_tasks = "Нет задач. Нажмите Ctrl+N, чтобы добавить новую."
-            self.stdscr.addstr(3, (w - len(no_tasks)) // 2, no_tasks)
+            return
+            
+        task_id = self.tasks[self.selected_idx][0]
+        c = self.conn.cursor()
+        c.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        self.conn.commit()
+        prev_len = len(self.tasks)
+        self.load_tasks()
         
+        if prev_len > 0:
+            if self.selected_idx >= len(self.tasks):
+                self.selected_idx = max(0, len(self.tasks) - 1)
+
+    def edit_description(self, task_id):
+        # Получаем текущее описание
+        c = self.conn.cursor()
+        c.execute("SELECT description FROM tasks WHERE id = ?", (task_id,))
+        description = c.fetchone()[0] or ""
+
+        # Создаем окно для редактирования
+        edit_win = curses.newwin(curses.LINES - 1, curses.COLS, 0, 0)
+        edit_win.clear()
+        edit_win.addstr(0, 0, "Edit description (Ctrl+G to save, Ctrl+C to cancel):")
+        edit_win.refresh()
+        
+        # Создаем текстовое поле
+        text_win = curses.newwin(curses.LINES - 2, curses.COLS - 1, 1, 0)
+        text_win.addstr(description)
+        text_win.refresh()
+        
+        # Включаем режим редактирования
+        textbox = curses.textpad.Textbox(text_win)
+        textbox.edit()
+        
+        # Получаем отредактированный текст
+        edited_text = textbox.gather().strip()
+        
+        # Сохраняем изменения
+        c.execute("UPDATE tasks SET description = ? WHERE id = ?", (edited_text, task_id))
+        self.conn.commit()
+
+    def view_task_details(self, task_idx):
+        if task_idx < 0 or task_idx >= len(self.tasks):
+            return
+            
+        task = self.tasks[task_idx]
+        task_id, name, created_date, description = task
+        
+        # Форматируем дату
+        try:
+            dt = datetime.datetime.strptime(created_date, "%Y-%m-%d %H:%M:%S")
+            display_date = dt.strftime("%d.%m.%Y %H:%M")
+        except:
+            display_date = created_date
+        
+        # Режим детального просмотра
+        while True:
+            self.stdscr.clear()
+            height, width = self.stdscr.getmaxyx()
+            
+            # Заголовок
+            self.stdscr.addstr(0, 0, f"Task Details: {task_id} - {name}")
+            self.stdscr.addstr(1, 0, f"Created: {display_date}")
+            self.stdscr.addstr(2, 0, "-" * width)
+            
+            # Меню опций
+            self.stdscr.addstr(3, 0, "1. Add/Edit Objects")
+            self.stdscr.addstr(4, 0, "2. Development Log")
+            
+            self.stdscr.addstr(5, 0, "-" * width)
+            
+            # Описание задачи
+            self.stdscr.addstr(6, 0, "Description:")
+            if description:
+                # Отображаем описание с переносами
+                y = 7
+                for line in description.split('\n'):
+                    if y < height - 2 and line.strip():
+                        self.stdscr.addstr(y, 0, line)
+                        y += 1
+            else:
+                self.stdscr.addstr(7, 0, "No description available")
+            
+            # Подсказки
+            footer = "q:Back  Ctrl+O:Edit Description"
+            self.stdscr.addstr(height - 1, 0, footer[:width-1])
+            self.stdscr.refresh()
+            
+            # Обработка ввода
+            key = self.stdscr.getch()
+            
+            if key == ord('q'):
+                break
+            elif key == 15:  # Ctrl+O
+                self.edit_description(task_id)
+                # Обновляем данные задачи
+                self.load_tasks()
+                task = self.tasks[task_idx]
+
+    def show_message(self, msg):
+        self.stdscr.move(curses.LINES - 1, 0)
+        self.stdscr.clrtoeol()
+        self.stdscr.addstr(curses.LINES - 1, 0, msg)
         self.stdscr.refresh()
 
-    def draw_task_detail(self):
-        """Отрисовать детали задачи"""
-        if not self.tasks or self.selected_idx >= len(self.tasks):
-            return
-        
-        task = self.tasks[self.selected_idx]
-        objects = self.load_objects(task.jira_id)
-        logs = self.load_logs(task.jira_id)
-        
+    def draw_ui(self):
         self.stdscr.clear()
-        h, w = self.stdscr.getmaxyx()
+        height, width = self.stdscr.getmaxyx()
         
-        # Заголовок
-        title = f" Детали задачи: {task.jira_id} "
-        self.stdscr.addstr(0, (w - len(title)) // 2, title, curses.color_pair(3) | curses.A_BOLD)
+        # Заголовки
+        self.stdscr.addstr(0, 0, "ID")
+        self.stdscr.addstr(0, 20, "Task Name")
+        self.stdscr.addstr(0, 60, "Created Date")
+        self.stdscr.addstr(1, 0, "-" * (width - 1))
+        
+        # Задачи (новые сверху)
+        for i, task in enumerate(self.tasks):
+            task_id, name, created_date, _ = task
+            line = i + 2
+            
+            # Форматируем дату
+            try:
+                dt = datetime.datetime.strptime(created_date, "%Y-%m-%d %H:%M:%S")
+                display_date = dt.strftime("%d.%m.%Y %H:%M")
+            except:
+                display_date = created_date
+            
+            # Обрезаем длинные значения
+            display_id = task_id if len(task_id) < 18 else task_id[:15] + "..."
+            display_name = name if len(name) < 38 else name[:35] + "..."
+            
+            # Выделение текущей строки
+            if i == self.selected_idx:
+                self.stdscr.attron(curses.A_REVERSE)
+            
+            self.stdscr.addstr(line, 0, display_id)
+            self.stdscr.addstr(line, 20, display_name)
+            self.stdscr.addstr(line, 60, display_date)
+            
+            if i == self.selected_idx:
+                self.stdscr.attroff(curses.A_REVERSE)
         
         # Подсказки
-        help_text = "←/→: Разделы | ↑/↓: Навигация | Enter: Выбрать | Ctrl+N: Добавить | Ctrl+U: Обновить | Ctrl+D: Удалить | Esc: Назад"
-        self.stdscr.addstr(h-1, 0, help_text, curses.A_DIM)
-        
-        # Разделы
-        sections = [
-            "Описание задачи",
-            f"Измененные/новые объекты ({len(objects)})",
-            f"Лог разработки ({len(logs)})"
-        ]
-        
-        # Отображение разделов
-        for idx, section in enumerate(sections):
-            # Подсветка выбранного раздела
-            if idx == self.task_detail_section:
-                self.stdscr.addstr(2 + idx, 2, ">" + section, curses.A_BOLD)
-            else:
-                self.stdscr.addstr(2 + idx, 2, " " + section)
-        
-        # Отображение содержимого раздела
-        if self.task_detail_section == 0:  # Описание
-            # Индикатор редактирования
-            edit_hint = "Ctrl+U: Редактировать описание" if task.description else "Ctrl+U: Добавить описание"
-            self.stdscr.addstr(2, w - len(edit_hint) - 2, edit_hint, curses.A_DIM)
-            
-            if task.description:
-                # Разбиваем описание на строки с переносом
-                desc_lines = []
-                for line in task.description.split('\n'):
-                    desc_lines.extend(textwrap.wrap(line, width=w-4))
-                
-                # Рассчитываем доступное пространство (учитываем заголовки и подсказки)
-                available_height = max(0, h - 6)  # 6 строк занято заголовками и разделами
-                
-                # Прокрутка описания
-                max_scroll = max(0, len(desc_lines) - available_height)
-                self.description_scroll = min(self.description_scroll, max_scroll)
-                
-                # Отображаем видимую часть описания
-                start_line = self.description_scroll
-                end_line = min(start_line + available_height, len(desc_lines))
-                
-                for i, line in enumerate(desc_lines[start_line:end_line]):
-                    if 6 + i < h - 1:  # Не заходить на подсказку
-                        self.stdscr.addstr(6 + i, 2, line, curses.color_pair(1))
-                
-                # Индикаторы прокрутки
-                if max_scroll > 0:
-                    if self.description_scroll > 0:
-                        self.stdscr.addstr(6, w-2, "↑", curses.A_BOLD)
-                    if self.description_scroll < max_scroll:
-                        self.stdscr.addstr(min(6 + available_height - 1, h-2), w-2, "↓", curses.A_BOLD)
-            else:
-                no_desc = "Описание отсутствует. Нажмите Ctrl+U, чтобы добавить."
-                self.stdscr.addstr(6, (w - len(no_desc)) // 2, no_desc, curses.color_pair(2))
-        
-        elif self.task_detail_section == 1:  # Объекты
-            for idx, obj in enumerate(objects):
-                if 6 + idx >= h - 1:
-                    break
-                
-                # Форматируем строку для отображения
-                obj_str = f"[{obj['type']}] {obj['name']}"
-                if obj['description']:
-                    # Берем первую строку описания
-                    first_line = obj['description'].split('\n')[0]
-                    # Обрезаем длинное описание
-                    max_desc_len = w - 30
-                    if len(first_line) > max_desc_len:
-                        first_line = first_line[:max_desc_len-3] + "..."
-                    obj_str += f": {first_line}"
-                
-                prefix = ">" if idx == self.object_idx else " "
-                self.stdscr.addstr(6 + idx, 2, f"{prefix}{idx+1}. {obj_str}", curses.color_pair(5))
-        
-        elif self.task_detail_section == 2:  # Логи
-            today = datetime.now().strftime("%Y-%m-%d")
-            for idx, log in enumerate(logs):
-                if 6 + idx >= h - 1:
-                    break
-                
-                # Подсветка сегодняшней даты
-                color = curses.color_pair(6) | curses.A_BOLD if log["date"] == today else curses.color_pair(6)
-                prefix = ">" if idx == self.log_idx else " "
-                
-                # Отобразить дату и количество записей
-                log_line = f"{prefix}{log['date']} ({len(log['entries'])})"
-                self.stdscr.addstr(6 + idx, 2, log_line, color)
-                
-                # Отобразить последнюю запись
-                if log["entries"] and 6 + idx < h - 2:
-                    last_entry = log["entries"][-1][:w-20]
-                    self.stdscr.addstr(6 + idx, 25, f"- {last_entry}", color)
-        
+        footer = "Ctrl+N:New  Ctrl+U:Update  Ctrl+D:Delete  Enter:Details  Ctrl+Q:Quit"
+        self.stdscr.addstr(height - 1, 0, footer[:width-1])
         self.stdscr.refresh()
 
     def run(self):
-        """Главный цикл приложения"""
+        curses.curs_set(0)
+        self.stdscr.keypad(True)
+        
         while True:
-            if not self.check_window_size():
-                # Обработка слишком маленького окна
-                self.stdscr.clear()
-                msg = f"Минимальный размер: {MIN_WIDTH}x{MIN_HEIGHT}"
-                self.stdscr.addstr(0, 0, msg, curses.A_BOLD)
-                self.stdscr.refresh()
-                key = self.stdscr.getch()
-                if key == ord('q'):
-                    break
-                continue
-            
-            if self.mode == "task_list":
-                self.draw_task_list()
-            elif self.mode == "task_detail":
-                self.draw_task_detail()
-            
+            self.draw_ui()
             key = self.stdscr.getch()
             
-            # Обработка изменения размера окна
-            if key == curses.KEY_RESIZE:
-                continue
-            
-            # Режим списка задач
-            if self.mode == "task_list":
-                # Навигация
-                if key == curses.KEY_UP and self.selected_idx > 0:
-                    self.selected_idx -= 1
-                    if self.selected_idx < self.top_idx:
-                        self.top_idx = self.selected_idx
-                elif key == curses.KEY_DOWN and self.selected_idx < len(self.tasks) - 1:
-                    self.selected_idx += 1
-                    if self.selected_idx >= self.top_idx + (curses.LINES - 4):
-                        self.top_idx += 1
-                
-                # Прокрутка страницы
-                elif key == curses.KEY_PPAGE and self.top_idx > 0:
-                    self.top_idx = max(0, self.top_idx - (curses.LINES - 4))
-                    self.selected_idx = self.top_idx
-                elif key == curses.KEY_NPAGE:
-                    self.top_idx = min(len(self.tasks) - 1, self.top_idx + (curses.LINES - 4))
-                    self.selected_idx = min(len(self.tasks) - 1, self.selected_idx + (curses.LINES - 4))
-                
-                # Горячие клавиши
-                elif key == ord('q'):  # Выход
-                    break
-                elif key == 10 or key == curses.KEY_ENTER:  # Enter - детали задачи
-                    if self.tasks:
-                        self.mode = "task_detail"
-                        self.task_detail_section = 0
-                        self.object_idx = 0
-                        self.log_idx = 0
-                        self.description_scroll = 0
-                elif key == 14:  # Ctrl+N - добавить
-                    self.add_task()
-                elif key == 21:  # Ctrl+U - обновить
-                    self.update_task()
-                elif key == 4:  # Ctrl+D - удалить
-                    self.delete_task()
-            
-            # Режим деталей задачи
-            elif self.mode == "task_detail":
-                # Обработка Esc в первую очередь
-                if key == 27:  # ESC - возврат в список задач
-                    self.mode = "task_list"
-                    continue
-                    
-                # Обработка Ctrl+U в первую очередь
-                elif key == 21:  # Ctrl+U
-                    if self.task_detail_section == 0:  # Редактировать описание
-                        self.edit_description()
-                    elif self.task_detail_section == 1:  # Добавить объект
-                        self.add_object(self.tasks[self.selected_idx].jira_id)
-                    elif self.task_detail_section == 2:  # Добавить запись в лог
-                        self.add_log_entry(self.tasks[self.selected_idx].jira_id)
-                    continue
-                
-                # Навигация между разделами
-                if key == curses.KEY_LEFT:
-                    if self.task_detail_section > 0:
-                        self.task_detail_section -= 1
-                        # Сброс позиций при переключении раздела
-                        self.object_idx = 0
-                        self.log_idx = 0
-                        self.description_scroll = 0
-                elif key == curses.KEY_RIGHT:
-                    if self.task_detail_section < 2:
-                        self.task_detail_section += 1
-                        self.object_idx = 0
-                        self.log_idx = 0
-                        self.description_scroll = 0
-                
-                # Навигация внутри текущего раздела
-                if self.task_detail_section == 0:  # Описание
-                    if key == curses.KEY_UP and self.description_scroll > 0:
-                        self.description_scroll -= 1
-                    elif key == curses.KEY_DOWN:
-                        task = self.tasks[self.selected_idx]
-                        if task.description:
-                            h, w = self.stdscr.getmaxyx()
-                            desc_lines = []
-                            for line in task.description.split('\n'):
-                                desc_lines.extend(textwrap.wrap(line, width=w-4))
-                            available_height = max(0, h - 6)
-                            max_scroll = max(0, len(desc_lines) - available_height)
-                            if self.description_scroll < max_scroll:
-                                self.description_scroll += 1
-                
-                elif self.task_detail_section == 1:  # Объекты
-                    objects = self.load_objects(self.tasks[self.selected_idx].jira_id)
-                    if key == curses.KEY_UP and self.object_idx > 0:
-                        self.object_idx -= 1
-                    elif key == curses.KEY_DOWN and self.object_idx < len(objects) - 1:
-                        self.object_idx += 1
-                
-                elif self.task_detail_section == 2:  # Логи
-                    logs = self.load_logs(self.tasks[self.selected_idx].jira_id)
-                    if key == curses.KEY_UP and self.log_idx > 0:
-                        self.log_idx -= 1
-                    elif key == curses.KEY_DOWN and self.log_idx < len(logs) - 1:
-                        self.log_idx += 1
-                
-                # Выбор раздела/действия
-                elif key == 10 or key == curses.KEY_ENTER:
-                    if self.task_detail_section == 1:  # Редактировать объект
-                        self.edit_object(self.tasks[self.selected_idx].jira_id)
-                    elif self.task_detail_section == 2 and logs:  # Просмотр логов
-                        pass
-                
-                # Добавление
-                elif key == 14:  # Ctrl+N
-                    if self.task_detail_section == 1:  # Добавить объект
-                        self.add_object(self.tasks[self.selected_idx].jira_id)
-                    elif self.task_detail_section == 2:  # Добавить запись в лог
-                        self.add_log_entry(self.tasks[self.selected_idx].jira_id)
-                
-                # Удаление
-                elif key == 4:  # Ctrl+D
-                    if self.task_detail_section == 1:  # Удалить объект
-                        self.delete_object(self.tasks[self.selected_idx].jira_id)
-                    elif self.task_detail_section == 2:  # Удалить лог
-                        pass
-            
-            # Выход по Ctrl+C
-            elif key == 3:
+            if key == curses.KEY_UP and self.selected_idx > 0:
+                self.selected_idx -= 1
+            elif key == curses.KEY_DOWN and self.selected_idx < len(self.tasks) - 1:
+                self.selected_idx += 1
+            elif key == 14:  # Ctrl+N
+                self.create_task()
+            elif key == 21:  # Ctrl+U
+                self.update_task()
+            elif key == 4:   # Ctrl+D
+                self.delete_task()
+            elif key == 10:  # Enter
+                self.view_task_details(self.selected_idx)
+            elif key == 17:  # Ctrl+Q
                 break
 
 def main(stdscr):
-    curses.use_default_colors()
-    app = TaskManagerTUI(stdscr)
+    app = TaskManager(stdscr)
+    app.run()
 
 if __name__ == "__main__":
-    wrapper(main)
+    curses.wrapper(main)
