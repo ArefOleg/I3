@@ -282,10 +282,73 @@ class TaskManager:
             self.show_message("Description cannot be empty! Object not created. Press any key.")
             self.stdscr.getch()
 
+    def update_object(self, task_id, obj_id):
+        c = self.conn.cursor()
+        # Получаем текущие данные объекта
+        c.execute("""SELECT object_type, name, description 
+                  FROM task_objects 
+                  WHERE id = ?""", (obj_id,))
+        obj = c.fetchone()
+        
+        if not obj:
+            return
+            
+        obj_type, name, description = obj
+        
+        # Шаг 1: Редактирование имени объекта
+        self.stdscr.clear()
+        self.stdscr.addstr(0, 0, f"Update object name (current: {name}): ")
+        self.stdscr.refresh()
+        
+        curses.curs_set(1)
+        curses.echo()
+        self.stdscr.move(0, len(f"Update object name (current: {name}): "))
+        new_name = self.stdscr.getstr().decode('utf-8').strip()
+        curses.noecho()
+        curses.curs_set(0)
+        
+        if not new_name:
+            new_name = name
+
+        # Шаг 2: Редактирование описания объекта
+        # Создаем окно для редактирования
+        edit_win = curses.newwin(curses.LINES - 1, curses.COLS, 0, 0)
+        edit_win.clear()
+        edit_win.addstr(0, 0, f"Edit description for {obj_type} '{new_name}' (Ctrl+G to save, Ctrl+C to cancel):")
+        edit_win.refresh()
+        
+        # Создаем текстовое поле
+        text_win = curses.newwin(curses.LINES - 2, curses.COLS - 1, 1, 0)
+        if description:
+            text_win.addstr(description)
+        text_win.refresh()
+        
+        # Включаем режим редактирования
+        textbox = curses.textpad.Textbox(text_win)
+        textbox.edit()
+        
+        # Получаем отредактированный текст
+        new_description = textbox.gather().strip()
+        
+        # Сохраняем изменения
+        if new_description:
+            c.execute("""UPDATE task_objects 
+                      SET name = ?, description = ? 
+                      WHERE id = ?""",
+                      (new_name, new_description, obj_id))
+            self.conn.commit()
+            self.show_message(f"Object updated! Press any key.")
+            self.stdscr.getch()
+        else:
+            self.show_message("Description cannot be empty! Update canceled. Press any key.")
+            self.stdscr.getch()
+            
+        return new_description
+
     def show_list_objects(self, task_id):
         # Получаем объекты для задачи
         c = self.conn.cursor()
-        c.execute("""SELECT object_type, name, created_date, description 
+        c.execute("""SELECT id, object_type, name, created_date, description 
                   FROM task_objects 
                   WHERE task_id = ? 
                   ORDER BY created_date DESC""", 
@@ -311,7 +374,7 @@ class TaskManager:
             
             # Отображаем объекты
             for i, obj in enumerate(objects[start_idx:start_idx+page_size]):
-                obj_type, obj_name, created_date, description = obj
+                obj_id, obj_type, obj_name, created_date, description = obj
                 
                 # Форматируем дату
                 try:
@@ -336,7 +399,7 @@ class TaskManager:
                     self.stdscr.attroff(curses.A_REVERSE)
             
             # Подсказки
-            footer = "q:Back  ↑/↓:Navigate  Enter:View Details"
+            footer = "q:Back  ↑/↓:Navigate  Enter:View Details  Ctrl+U:Update Object"
             self.stdscr.addstr(height - 1, 0, footer[:width-1])
             self.stdscr.refresh()
             
@@ -359,9 +422,20 @@ class TaskManager:
                 # Показываем детали объекта
                 obj = objects[current_idx]
                 self.show_object_details(task_id, obj)
+            elif key == 21:  # Ctrl+U - Обновить объект
+                if objects:
+                    obj_id = objects[current_idx][0]
+                    self.update_object(task_id, obj_id)
+                    # Перезагружаем объекты после обновления
+                    c.execute("""SELECT id, object_type, name, created_date, description 
+                              FROM task_objects 
+                              WHERE task_id = ? 
+                              ORDER BY created_date DESC""", 
+                              (task_id,))
+                    objects = c.fetchall()
 
     def show_object_details(self, task_id, obj):
-        obj_type, obj_name, created_date, description = obj
+        obj_id, obj_type, obj_name, created_date, description = obj
         
         # Форматируем дату
         try:
@@ -525,68 +599,4 @@ class TaskManager:
         
         # Заголовки
         self.stdscr.addstr(0, 0, "ID")
-        self.stdscr.addstr(0, 20, "Task Name")
-        self.stdscr.addstr(0, 60, "Created Date")
-        self.stdscr.addstr(1, 0, "-" * (width - 1))
-        
-        # Задачи (новые сверху)
-        for i, task in enumerate(self.tasks):
-            task_id, name, created_date, _ = task
-            line = i + 2
-            
-            # Форматируем дату
-            try:
-                dt = datetime.datetime.strptime(created_date, "%Y-%m-%d %H:%M:%S")
-                display_date = dt.strftime("%d.%m.%Y %H:%M")
-            except:
-                display_date = created_date
-            
-            # Обрезаем длинные значения
-            display_id = task_id if len(task_id) < 18 else task_id[:15] + "..."
-            display_name = name if len(name) < 38 else name[:35] + "..."
-            
-            # Выделение текущей строки
-            if i == self.selected_idx:
-                self.stdscr.attron(curses.A_REVERSE)
-            
-            self.stdscr.addstr(line, 0, display_id)
-            self.stdscr.addstr(line, 20, display_name)
-            self.stdscr.addstr(line, 60, display_date)
-            
-            if i == self.selected_idx:
-                self.stdscr.attroff(curses.A_REVERSE)
-        
-        # Подсказки
-        footer = "Ctrl+N:New  Ctrl+U:Update  Ctrl+D:Delete  Enter:Details  Ctrl+Q:Quit"
-        self.stdscr.addstr(height - 1, 0, footer[:width-1])
-        self.stdscr.refresh()
-
-    def run(self):
-        curses.curs_set(0)
-        self.stdscr.keypad(True)
-        
-        while True:
-            self.draw_ui()
-            key = self.stdscr.getch()
-            
-            if key == curses.KEY_UP and self.selected_idx > 0:
-                self.selected_idx -= 1
-            elif key == curses.KEY_DOWN and self.selected_idx < len(self.tasks) - 1:
-                self.selected_idx += 1
-            elif key == 14:  # Ctrl+N
-                self.create_task()
-            elif key == 21:  # Ctrl+U
-                self.update_task()
-            elif key == 4:   # Ctrl+D
-                self.delete_task()
-            elif key == 10:  # Enter
-                self.view_task_details(self.selected_idx)
-            elif key == 17:  # Ctrl+Q
-                break
-
-def main(stdscr):
-    app = TaskManager(stdscr)
-    app.run()
-
-if __name__ == "__main__":
-    curses.wrapper(main)
+        self.stdscr.addstr(0, 
