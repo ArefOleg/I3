@@ -599,4 +599,68 @@ class TaskManager:
         
         # Заголовки
         self.stdscr.addstr(0, 0, "ID")
-        self.stdscr.addstr(0, 
+        self.stdscr.addstr(0, 20, "Task Name")
+        self.stdscr.addstr(0, 60, "Created Date")
+        self.stdscr.addstr(1, 0, "-" * (width - 1))
+        
+        # Задачи (новые сверху)
+        for i, task in enumerate(self.tasks):
+            task_id, name, created_date, _ = task
+            line = i + 2
+            
+            # Форматируем дату
+            try:
+                dt = datetime.datetime.strptime(created_date, "%Y-%m-%d %H:%M:%S")
+                display_date = dt.strftime("%d.%m.%Y %H:%M")
+            except:
+                display_date = created_date
+            
+            # Обрезаем длинные значения
+            display_id = task_id if len(task_id) < 18 else task_id[:15] + "..."
+            display_name = name if len(name) < 38 else name[:35] + "..."
+            
+            # Выделение текущей строки
+            if i == self.selected_idx:
+                self.stdscr.attron(curses.A_REVERSE)
+            
+            self.stdscr.addstr(line, 0, display_id)
+            self.stdscr.addstr(line, 20, display_name)
+            self.stdscr.addstr(line, 60, display_date)
+            
+            if i == self.selected_idx:
+                self.stdscr.attroff(curses.A_REVERSE)
+        
+        # Подсказки
+        footer = "Ctrl+N:New  Ctrl+U:Update  Ctrl+D:Delete  Enter:Details  Ctrl+Q:Quit"
+        self.stdscr.addstr(height - 1, 0, footer[:width-1])
+        self.stdscr.refresh()
+
+    def run(self):
+        curses.curs_set(0)
+        self.stdscr.keypad(True)
+        
+        while True:
+            self.draw_ui()
+            key = self.stdscr.getch()
+            
+            if key == curses.KEY_UP and self.selected_idx > 0:
+                self.selected_idx -= 1
+            elif key == curses.KEY_DOWN and self.selected_idx < len(self.tasks) - 1:
+                self.selected_idx += 1
+            elif key == 14:  # Ctrl+N
+                self.create_task()
+            elif key == 21:  # Ctrl+U
+                self.update_task()
+            elif key == 4:   # Ctrl+D
+                self.delete_task()
+            elif key == 10:  # Enter
+                self.view_task_details(self.selected_idx)
+            elif key == 17:  # Ctrl+Q
+                break
+
+def main(stdscr):
+    app = TaskManager(stdscr)
+    app.run()
+
+if __name__ == "__main__":
+    curses.wrapper(main)
