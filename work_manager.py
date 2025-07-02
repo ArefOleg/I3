@@ -25,6 +25,15 @@ def init_db():
                 created_date TEXT NOT NULL,
                 FOREIGN KEY (task_id) REFERENCES tasks(id))''')
     
+    # Таблица логов разработки
+    c.execute('''CREATE TABLE IF NOT EXISTS task_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                log_date TEXT NOT NULL,   -- Дата лога в формате 'YYYY-MM-DD'
+                content TEXT NOT NULL,    -- Содержимое лога
+                created_date TEXT NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES tasks(id))''')
+    
     # Проверяем существование колонок для tasks
     c.execute("PRAGMA table_info(tasks)")
     columns = [col[1] for col in c.fetchall()]
@@ -486,6 +495,197 @@ class TaskManager:
             if key == ord('q'):
                 break
 
+    def edit_today_log(self, task_id):
+        """Создает или редактирует лог за сегодняшний день"""
+        today = datetime.date.today().strftime("%Y-%m-%d")
+        created_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        c = self.conn.cursor()
+        
+        # Проверяем, есть ли уже лог за сегодня
+        c.execute("""SELECT id, content 
+                  FROM task_logs 
+                  WHERE task_id = ? AND log_date = ?""", 
+                  (task_id, today))
+        log = c.fetchone()
+        
+        log_id = None
+        content = ""
+        
+        if log:
+            log_id, content = log
+        else:
+            # Создаем новую запись лога
+            c.execute("""INSERT INTO task_logs 
+                      (task_id, log_date, content, created_date) 
+                      VALUES (?, ?, ?, ?)""", 
+                      (task_id, today, "", created_date))
+            self.conn.commit()
+            log_id = c.lastrowid
+        
+        # Создаем окно для редактирования
+        edit_win = curses.newwin(curses.LINES - 1, curses.COLS, 0, 0)
+        edit_win.clear()
+        edit_win.addstr(0, 0, f"Edit today's log ({today}) for task: {task_id} (Ctrl+G to save, Ctrl+C to cancel):")
+        edit_win.refresh()
+        
+        # Создаем текстовое поле
+        text_win = curses.newwin(curses.LINES - 2, curses.COLS - 1, 1, 0)
+        if content:
+            text_win.addstr(content)
+        text_win.refresh()
+        
+        # Включаем режим редактирования
+        textbox = curses.textpad.Textbox(text_win)
+        textbox.edit()
+        
+        # Получаем отредактированный текст
+        edited_text = textbox.gather().strip()
+        
+        # Сохраняем изменения
+        c.execute("""UPDATE task_logs 
+                  SET content = ?, created_date = ?
+                  WHERE id = ?""", 
+                  (edited_text, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), log_id))
+        self.conn.commit()
+        
+        return edited_text
+
+    def show_log_list(self, task_id):
+        """Показывает список логов для задачи"""
+        c = self.conn.cursor()
+        c.execute("""SELECT id, log_date, content, created_date 
+                  FROM task_logs 
+                  WHERE task_id = ? 
+                  ORDER BY log_date DESC""", 
+                  (task_id,))
+        logs = c.fetchall()
+        
+        if not logs:
+            self.show_message("No logs found for this task. Press any key.")
+            self.stdscr.getch()
+            return
+        
+        # Отображаем список логов
+        current_idx = 0
+        start_idx = 0
+        page_size = curses.LINES - 3
+        
+        while True:
+            self.stdscr.clear()
+            height, width = self.stdscr.getmaxyx()
+            
+            self.stdscr.addstr(0, 0, f"Logs for Task: {task_id}")
+            self.stdscr.addstr(1, 0, "-" * width)
+            
+            # Отображаем логи
+            for i, log in enumerate(logs[start_idx:start_idx+page_size]):
+                log_id, log_date, content, created_date = log
+                
+                # Форматируем дату
+                try:
+                    dt = datetime.datetime.strptime(log_date, "%Y-%m-%d")
+                    display_date = dt.strftime("%d.%m.%Y")
+                except:
+                    display_date = log_date
+                
+                # Выделение текущего лога
+                if i + start_idx == current_idx:
+                    self.stdscr.attron(curses.A_REVERSE)
+                
+                # Отображаем информацию
+                self.stdscr.addstr(2 + i, 0, f"Log: {display_date}")
+                
+                # Отображаем начало содержимого
+                short_content = content.split('\n')[0][:width-20] + "..." if content else "No content"
+                self.stdscr.addstr(2 + i, 15, short_content)
+                
+                if i + start_idx == current_idx:
+                    self.stdscr.attroff(curses.A_REVERSE)
+            
+            # Подсказки
+            footer = "q:Back  ↑/↓:Navigate  Enter:View Log"
+            self.stdscr.addstr(height - 1, 0, footer[:width-1])
+            self.stdscr.refresh()
+            
+            # Обработка ввода
+            key = self.stdscr.getch()
+            
+            if key == ord('q'):
+                break
+            elif key == curses.KEY_UP:
+                if current_idx > 0:
+                    current_idx -= 1
+                    if current_idx < start_idx:
+                        start_idx = current_idx
+            elif key == curses.KEY_DOWN:
+                if current_idx < len(logs) - 1:
+                    current_idx += 1
+                    if current_idx >= start_idx + page_size:
+                        start_idx += 1
+            elif key == 10:  # Enter
+                # Показываем детали лога
+                log = logs[current_idx]
+                self.show_log_details(task_id, log)
+
+    def show_log_details(self, task_id, log):
+        log_id, log_date, content, created_date = log
+        
+        # Форматируем даты
+        try:
+            dt_log = datetime.datetime.strptime(log_date, "%Y-%m-%d")
+            display_log_date = dt_log.strftime("%d.%m.%Y")
+        except:
+            display_log_date = log_date
+            
+        try:
+            dt_created = datetime.datetime.strptime(created_date, "%Y-%m-%d %H:%M:%S")
+            display_created_date = dt_created.strftime("%d.%m.%Y %H:%M")
+        except:
+            display_created_date = created_date
+        
+        while True:
+            self.stdscr.clear()
+            height, width = self.stdscr.getmaxyx()
+            
+            # Заголовок
+            self.stdscr.addstr(0, 0, f"Log for {display_log_date} | Created: {display_created_date}")
+            self.stdscr.addstr(1, 0, f"Task: {task_id}")
+            self.stdscr.addstr(2, 0, "-" * width)
+            
+            # Содержимое лога
+            self.stdscr.addstr(3, 0, "Content:")
+            if content:
+                # Отображаем содержимое с переносами
+                y = 4
+                for line in content.split('\n'):
+                    if y < height - 2 and line.strip():
+                        # Обрезаем строку, если она слишком длинная
+                        while len(line) > width:
+                            self.stdscr.addstr(y, 0, line[:width])
+                            line = line[width:]
+                            y += 1
+                            if y >= height - 2:
+                                break
+                        if y < height - 1:
+                            self.stdscr.addstr(y, 0, line)
+                            y += 1
+                        if y >= height - 2:
+                            break
+            else:
+                self.stdscr.addstr(4, 0, "No content available")
+            
+            # Подсказки
+            footer = "q:Back"
+            self.stdscr.addstr(height - 1, 0, footer[:width-1])
+            self.stdscr.refresh()
+            
+            # Обработка ввода
+            key = self.stdscr.getch()
+            
+            if key == ord('q'):
+                break
+
     def view_task_details(self, task_idx):
         # Загружаем текущие данные задачи
         c = self.conn.cursor()
@@ -498,11 +698,12 @@ class TaskManager:
             
         task_id, name, created_date, description = task
         
-        # Опции меню
+        # Обновленные опции меню
         menu_options = [
             "Add Objects",
             "Show List Objects",
-            "Development Log"
+            "Log",  # Переименовано
+            "Show List Log"  # Новый пункт
         ]
         selected_option = 0
         
@@ -577,9 +778,10 @@ class TaskManager:
                     self.add_object(task_id)
                 elif selected_option == 1:  # Show List Objects
                     self.show_list_objects(task_id)
-                elif selected_option == 2:  # Development Log
-                    self.show_message("Development Log functionality will be here")
-                    self.stdscr.getch()
+                elif selected_option == 2:  # Log (бывший Development Log)
+                    self.edit_today_log(task_id)
+                elif selected_option == 3:  # Show List Log (новый)
+                    self.show_log_list(task_id)
             elif key == 15:  # Ctrl+O
                 # Редактируем описание и сразу обновляем переменную
                 new_description = self.edit_description(task_id)
