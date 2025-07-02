@@ -155,6 +155,14 @@ class TaskManager:
             
         task_id, name, created_date, description = task
         
+        # Опции меню
+        menu_options = [
+            "Add Objects",
+            "Show List Objects",
+            "Development Log"
+        ]
+        selected_option = 0
+        
         # Режим детального просмотра
         while True:
             # Форматируем дату
@@ -172,17 +180,21 @@ class TaskManager:
             self.stdscr.addstr(1, 0, f"Created: {display_date}")
             self.stdscr.addstr(2, 0, "-" * width)
             
-            # Меню опций
-            self.stdscr.addstr(3, 0, "1. Add/Edit Objects")
-            self.stdscr.addstr(4, 0, "2. Development Log")
+            # Меню опций с навигацией стрелками
+            for i, option in enumerate(menu_options):
+                if i == selected_option:
+                    self.stdscr.attron(curses.A_REVERSE)
+                self.stdscr.addstr(3 + i, 0, f"{i+1}. {option}")
+                if i == selected_option:
+                    self.stdscr.attroff(curses.A_REVERSE)
             
-            self.stdscr.addstr(5, 0, "-" * width)
+            self.stdscr.addstr(3 + len(menu_options), 0, "-" * width)
             
             # Описание задачи
-            self.stdscr.addstr(6, 0, "Description:")
+            self.stdscr.addstr(4 + len(menu_options), 0, "Description:")
             if description:
                 # Отображаем описание с переносами
-                y = 7
+                y = 5 + len(menu_options)
                 for line in description.split('\n'):
                     if y < height - 2 and line.strip():
                         # Обрезаем строку, если она слишком длинная
@@ -199,10 +211,10 @@ class TaskManager:
                         if y >= height - 2:
                             break
             else:
-                self.stdscr.addstr(7, 0, "No description available")
+                self.stdscr.addstr(5 + len(menu_options), 0, "No description available")
             
             # Подсказки
-            footer = "q:Back  Ctrl+O:Edit Description"
+            footer = "q:Back  ↑/↓:Navigate  Enter:Select  Ctrl+O:Edit Description"
             self.stdscr.addstr(height - 1, 0, footer[:width-1])
             self.stdscr.refresh()
             
@@ -211,6 +223,23 @@ class TaskManager:
             
             if key == ord('q'):
                 break
+            elif key == curses.KEY_UP:
+                if selected_option > 0:
+                    selected_option -= 1
+            elif key == curses.KEY_DOWN:
+                if selected_option < len(menu_options) - 1:
+                    selected_option += 1
+            elif key == 10:  # Enter
+                # Обработка выбранной опции
+                if selected_option == 0:  # Add Objects
+                    self.show_message("Add Objects functionality will be here")
+                    self.stdscr.getch()
+                elif selected_option == 1:  # Show List Objects
+                    self.show_message("Show List Objects functionality will be here")
+                    self.stdscr.getch()
+                elif selected_option == 2:  # Development Log
+                    self.show_message("Development Log functionality will be here")
+                    self.stdscr.getch()
             elif key == 15:  # Ctrl+O
                 # Редактируем описание и сразу обновляем переменную
                 new_description = self.edit_description(task_id)
