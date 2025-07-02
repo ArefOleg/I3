@@ -355,12 +355,12 @@ class TaskManager:
         return new_description
 
     def show_list_objects(self, task_id):
-        # Получаем объекты для задачи
+        # Получаем объекты для задачи с сортировкой по типу объекта (алфавитный порядок) и по дате создания (новые сверху)
         c = self.conn.cursor()
         c.execute("""SELECT id, object_type, name, created_date, description 
                   FROM task_objects 
                   WHERE task_id = ? 
-                  ORDER BY created_date DESC""", 
+                  ORDER BY object_type ASC, created_date DESC""", 
                   (task_id,))
         objects = c.fetchall()
         
@@ -378,7 +378,8 @@ class TaskManager:
             self.stdscr.clear()
             height, width = self.stdscr.getmaxyx()
             
-            self.stdscr.addstr(0, 0, f"Objects for Task: {task_id}")
+            # Обновленный заголовок с указанием сортировки
+            self.stdscr.addstr(0, 0, f"Objects for Task: {task_id} (sorted by type)")
             self.stdscr.addstr(1, 0, "-" * width)
             
             # Отображаем объекты
@@ -439,7 +440,7 @@ class TaskManager:
                     c.execute("""SELECT id, object_type, name, created_date, description 
                               FROM task_objects 
                               WHERE task_id = ? 
-                              ORDER BY created_date DESC""", 
+                              ORDER BY object_type ASC, created_date DESC""", 
                               (task_id,))
                     objects = c.fetchall()
 
