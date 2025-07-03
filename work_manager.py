@@ -3,16 +3,6 @@ import sqlite3
 import datetime
 import curses
 import curses.textpad
-import locale
-
-# Устанавливаем локаль для поддержки Unicode
-try:
-    locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
-except:
-    try:
-        locale.setlocale(locale.LC_ALL, 'C.UTF-8')
-    except:
-        pass
 
 def init_db():
     conn = sqlite3.connect('tasks.db')
@@ -39,8 +29,8 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS task_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id TEXT NOT NULL,
-                log_date TEXT NOT NULL,   -- Дата лога в формате 'YYYY-MM-DD'
-                content TEXT NOT NULL,    -- Содержимое лога
+                log_date TEXT NOT NULL,
+                content TEXT NOT NULL,
                 created_date TEXT NOT NULL,
                 FOREIGN KEY (task_id) REFERENCES tasks(id))''')
     
@@ -72,8 +62,8 @@ class TaskManager:
         c.execute("SELECT id, name, created_date, description FROM tasks ORDER BY datetime(created_date) DESC")
         self.tasks = c.fetchall()
         
-    def get_unicode_input(self, y, x, max_len):
-        """Собирает строку с поддержкой Unicode символов"""
+    def get_input(self, y, x, max_len):
+        """Универсальная функция ввода с поддержкой русского"""
         s = []
         pos = 0
         self.stdscr.move(y, x)
@@ -82,35 +72,35 @@ class TaskManager:
 
         while True:
             try:
-                ch = self.stdscr.get_wch()
+                ch = self.stdscr.getch()
             except:
                 continue
             
-            # Обработка обычных символов
-            if isinstance(ch, str) and ch.isprintable():
-                if len(s) < max_len:
-                    s.insert(pos, ch)
-                    pos += 1
-            
-            # Обработка специальных клавиш
-            elif ch == curses.KEY_BACKSPACE or ch == '\x7f':  # Backspace
+            # Enter - завершение ввода
+            if ch == 10 or ch == 13:
+                break
+                
+            # Backspace
+            elif ch == curses.KEY_BACKSPACE or ch == 127:
                 if pos > 0:
                     del s[pos-1]
                     pos -= 1
-            elif ch == curses.KEY_DC:  # Delete
-                if pos < len(s):
-                    del s[pos]
+            
+            # Управление курсором
             elif ch == curses.KEY_LEFT:
                 if pos > 0:
                     pos -= 1
             elif ch == curses.KEY_RIGHT:
                 if pos < len(s):
                     pos += 1
-            elif ch == '\n':  # Enter - завершение ввода
-                break
-            elif ch == '\x1b':  # ESC - отмена
-                s = []
-                break
+            elif ch == curses.KEY_DC:  # Delete
+                if pos < len(s):
+                    del s[pos]
+            
+            # Обычные символы
+            elif ch < 256 and len(s) < max_len:
+                s.insert(pos, chr(ch))
+                pos += 1
             
             # Обновление отображения
             self.stdscr.move(y, x)
@@ -124,12 +114,8 @@ class TaskManager:
 
     def create_task(self):
         # Запрос ID
-        self.show_message("Enter task ID (any characters): ")
-        task_id = self.get_unicode_input(
-            curses.LINES - 1, 
-            len("Enter task ID (any characters): "),
-            50
-        )
+        self.show_message("Enter task ID: ")
+        task_id = self.get_input(curses.LINES - 1, len("Enter task ID: "), 50)
         
         if not task_id:
             return
@@ -142,11 +128,7 @@ class TaskManager:
 
         # Запрос названия задачи
         self.show_message("Enter task name: ")
-        name = self.get_unicode_input(
-            curses.LINES - 1, 
-            len("Enter task name: "),
-            70
-        )
+        name = self.get_input(curses.LINES - 1, len("Enter task name: "), 70)
         
         if name:
             created_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -167,7 +149,7 @@ class TaskManager:
             
         task_id = self.tasks[self.selected_idx][0]
         self.show_message(f"Update task (current: {self.tasks[self.selected_idx][1]}): ")
-        new_name = self.get_unicode_input(
+        new_name = self.get_input(
             curses.LINES - 1,
             len(f"Update task (current: {self.tasks[self.selected_idx][1]}): "),
             70
@@ -213,10 +195,10 @@ class TaskManager:
             text_win.addstr(description)
         text_win.refresh()
         
-        # Включаем режим редактирования с поддержкой UTF-8
+        # Включаем режим редактирования
         textbox = curses.textpad.Textbox(text_win, insert_mode=True)
         curses.curs_set(1)
-        textbox.edit(self.validate_input)
+        textbox.edit()
         curses.curs_set(0)
         
         # Получаем отредактированный текст
@@ -226,15 +208,7 @@ class TaskManager:
         c.execute("UPDATE tasks SET description = ? WHERE id = ?", (edited_text, task_id))
         self.conn.commit()
         
-        # Обновляем данные в текущем представлении
         return edited_text
-
-    def validate_input(self, key):
-        """Валидатор для поддержки русского ввода"""
-        # Разрешаем все печатные символы (включая русские)
-        if key >= 32 and key != 0x7f:
-            return key
-        return key
 
     def add_object(self, task_id):
         # Типы объектов
@@ -307,7 +281,7 @@ class TaskManager:
         self.stdscr.addstr(2, 0, "Enter object name: ")
         self.stdscr.refresh()
         
-        obj_name = self.get_unicode_input(2, len("Enter object name: "), 60)
+        obj_name = self.get_input(2, len("Enter object name: "), 60)
         
         if not obj_name:
             self.show_message("Object name cannot be empty! Press any key.")
@@ -327,10 +301,10 @@ class TaskManager:
         text_win = curses.newwin(curses.LINES - 2, curses.COLS - 1, 1, 0)
         text_win.refresh()
         
-        # Включаем режим редактирования с поддержкой UTF-8
+        # Включаем режим редактирования
         textbox = curses.textpad.Textbox(text_win, insert_mode=True)
         curses.curs_set(1)
-        textbox.edit(self.validate_input)
+        textbox.edit()
         curses.curs_set(0)
         
         # Получаем отредактированный текст
@@ -372,7 +346,7 @@ class TaskManager:
         self.stdscr.addstr(0, 0, f"Update object name (current: {name}): ")
         self.stdscr.refresh()
         
-        new_name = self.get_unicode_input(
+        new_name = self.get_input(
             0, 
             len(f"Update object name (current: {name}): "),
             60
@@ -394,10 +368,10 @@ class TaskManager:
             text_win.addstr(description)
         text_win.refresh()
         
-        # Включаем режим редактирования с поддержкой UTF-8
+        # Включаем режим редактирования
         textbox = curses.textpad.Textbox(text_win, insert_mode=True)
         curses.curs_set(1)
-        textbox.edit(self.validate_input)
+        textbox.edit()
         curses.curs_set(0)
         
         # Получаем отредактированный текст
@@ -419,7 +393,7 @@ class TaskManager:
         return new_description
 
     def show_list_objects(self, task_id):
-        # Получаем объекты для задачи с сортировкой по типу объекта (алфавитный порядок) и по дате создания (новые сверху)
+        # Получаем объекты для задачи
         c = self.conn.cursor()
         c.execute("""SELECT id, object_type, name, created_date, description 
                   FROM task_objects 
@@ -442,8 +416,7 @@ class TaskManager:
             self.stdscr.clear()
             height, width = self.stdscr.getmaxyx()
             
-            # Обновленный заголовок с указанием сортировки
-            self.stdscr.addstr(0, 0, f"Objects for Task: {task_id} (sorted by type)")
+            self.stdscr.addstr(0, 0, f"Objects for Task: {task_id}")
             self.stdscr.addstr(1, 0, "-" * width)
             
             # Отображаем объекты
@@ -500,7 +473,7 @@ class TaskManager:
                 if objects:
                     obj_id = objects[current_idx][0]
                     self.update_object(task_id, obj_id)
-                    # Перезагружаем объекты после обновления
+                    # Перезагружаем объекты
                     c.execute("""SELECT id, object_type, name, created_date, description 
                               FROM task_objects 
                               WHERE task_id = ? 
@@ -600,10 +573,10 @@ class TaskManager:
             text_win.addstr(content)
         text_win.refresh()
         
-        # Включаем режим редактирования с поддержкой UTF-8
+        # Включаем режим редактирования
         textbox = curses.textpad.Textbox(text_win, insert_mode=True)
         curses.curs_set(1)
-        textbox.edit(self.validate_input)
+        textbox.edit()
         curses.curs_set(0)
         
         # Получаем отредактированный текст
@@ -765,12 +738,12 @@ class TaskManager:
             
         task_id, name, created_date, description = task
         
-        # Обновленные опции меню
+        # Опции меню
         menu_options = [
             "Add Objects",
             "Show List Objects",
-            "Log",  # Переименовано
-            "Show List Log"  # Новый пункт
+            "Log",
+            "Show List Log"
         ]
         selected_option = 0
         
@@ -791,7 +764,7 @@ class TaskManager:
             self.stdscr.addstr(1, 0, f"Created: {display_date}")
             self.stdscr.addstr(2, 0, "-" * width)
             
-            # Меню опций с навигацией стрелками
+            # Меню опций
             for i, option in enumerate(menu_options):
                 if i == selected_option:
                     self.stdscr.attron(curses.A_REVERSE)
@@ -845,15 +818,15 @@ class TaskManager:
                     self.add_object(task_id)
                 elif selected_option == 1:  # Show List Objects
                     self.show_list_objects(task_id)
-                elif selected_option == 2:  # Log (бывший Development Log)
+                elif selected_option == 2:  # Log
                     self.edit_today_log(task_id)
-                elif selected_option == 3:  # Show List Log (новый)
+                elif selected_option == 3:  # Show List Log
                     self.show_log_list(task_id)
             elif key == 15:  # Ctrl+O
-                # Редактируем описание и сразу обновляем переменную
+                # Редактируем описание
                 new_description = self.edit_description(task_id)
                 description = new_description
-                # Обновляем список задач для главного экрана
+                # Обновляем список задач
                 self.load_tasks()
 
     def show_message(self, msg):
@@ -872,7 +845,7 @@ class TaskManager:
         self.stdscr.addstr(0, 60, "Created Date")
         self.stdscr.addstr(1, 0, "-" * (width - 1))
         
-        # Задачи (новые сверху)
+        # Задачи
         for i, task in enumerate(self.tasks):
             task_id, name, created_date, _ = task
             line = i + 2
@@ -928,10 +901,8 @@ class TaskManager:
                 break
 
 def main(stdscr):
-    # Включаем поддержку специальных клавиш и цветов
+    # Включаем поддержку специальных клавиш
     stdscr.keypad(True)
-    curses.start_color()
-    curses.use_default_colors()
     
     # Инициализируем менеджер задач
     app = TaskManager(stdscr)
