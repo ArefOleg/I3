@@ -3,6 +3,11 @@ import sqlite3
 import datetime
 import curses
 import curses.textpad
+import locale
+
+# Устанавливаем локаль для поддержки Unicode
+locale.setlocale(locale.LC_ALL, '')
+locale.setlocale(locale.LC_CTYPE, ('ru_RU', 'UTF-8'))
 
 def init_db():
     conn = sqlite3.connect('tasks.db')
@@ -156,9 +161,11 @@ class TaskManager:
             text_win.addstr(description)
         text_win.refresh()
         
-        # Включаем режим редактирования
-        textbox = curses.textpad.Textbox(text_win)
-        textbox.edit()
+        # Включаем режим редактирования с поддержкой UTF-8
+        textbox = curses.textpad.Textbox(text_win, insert_mode=True)
+        curses.curs_set(1)
+        textbox.edit(self.validate_input)
+        curses.curs_set(0)
         
         # Получаем отредактированный текст
         edited_text = textbox.gather().strip()
@@ -169,6 +176,13 @@ class TaskManager:
         
         # Обновляем данные в текущем представлении
         return edited_text
+
+    def validate_input(self, key):
+        """Валидатор для поддержки русского ввода"""
+        # Разрешаем все печатные символы (включая русские)
+        if key >= 32 and key != 0x7f:
+            return key
+        return key
 
     def add_object(self, task_id):
         # Типы объектов
@@ -266,9 +280,11 @@ class TaskManager:
         text_win = curses.newwin(curses.LINES - 2, curses.COLS - 1, 1, 0)
         text_win.refresh()
         
-        # Включаем режим редактирования
-        textbox = curses.textpad.Textbox(text_win)
-        textbox.edit()
+        # Включаем режим редактирования с поддержкой UTF-8
+        textbox = curses.textpad.Textbox(text_win, insert_mode=True)
+        curses.curs_set(1)
+        textbox.edit(self.validate_input)
+        curses.curs_set(0)
         
         # Получаем отредактированный текст
         description = textbox.gather().strip()
@@ -332,9 +348,11 @@ class TaskManager:
             text_win.addstr(description)
         text_win.refresh()
         
-        # Включаем режим редактирования
-        textbox = curses.textpad.Textbox(text_win)
-        textbox.edit()
+        # Включаем режим редактирования с поддержкой UTF-8
+        textbox = curses.textpad.Textbox(text_win, insert_mode=True)
+        curses.curs_set(1)
+        textbox.edit(self.validate_input)
+        curses.curs_set(0)
         
         # Получаем отредактированный текст
         new_description = textbox.gather().strip()
@@ -536,9 +554,11 @@ class TaskManager:
             text_win.addstr(content)
         text_win.refresh()
         
-        # Включаем режим редактирования
-        textbox = curses.textpad.Textbox(text_win)
-        textbox.edit()
+        # Включаем режим редактирования с поддержкой UTF-8
+        textbox = curses.textpad.Textbox(text_win, insert_mode=True)
+        curses.curs_set(1)
+        textbox.edit(self.validate_input)
+        curses.curs_set(0)
         
         # Получаем отредактированный текст
         edited_text = textbox.gather().strip()
@@ -862,6 +882,12 @@ class TaskManager:
                 break
 
 def main(stdscr):
+    # Включаем поддержку специальных клавиш и цветов
+    stdscr.keypad(True)
+    curses.start_color()
+    curses.use_default_colors()
+    
+    # Инициализируем менеджер задач
     app = TaskManager(stdscr)
     app.run()
 
