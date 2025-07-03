@@ -1,0 +1,65 @@
+~/.config/fcitx5/config
+[Hotkey]
+# Основное переключение IME
+TriggerKeys=Control+space
+
+# Переключение между группами
+ActivateGroup1=Super+1
+ActivateGroup2=Super+2
+
+# Переключение раскладок внутри группы EN-RU
+NextIM=Alt+Shift
+
+[Behavior]
+ActiveByDefault=true
+ShareInputState=No
+
+~/.config/fcitx5/profile
+[Groups/0]
+# Китайская группа
+Name=Chinese
+DefaultLayout=us
+DefaultIM=rime  # или pinyin
+
+[Groups/1]
+# Англо-русская группа
+Name=EN-RU
+DefaultLayout=us
+DefaultIM=keyboard-us
+
+# Порядок групп
+[GroupOrder]
+0=Chinese
+1=EN-RU
+
+~/.config/fcitx5/conf/xkb.conf
+[XKB]
+Layouts=us,ru
+ToggleKey=Alt+Shift
+
+~/.config/i3/config
+
+# Автозапуск Fcitx5
+exec --no-startup-id fcitx5 -d
+
+# Быстрое переключение режимов
+bindsym $mod+Shift+c exec "fcitx5-remote -g Chinese"
+bindsym $mod+Shift+r exec "fcitx5-remote -g EN-RU"
+
+# Индикатор в статусбаре
+bar {
+    status_command i3status | while :
+    do
+        read line
+        group=$(fcitx5-remote -g)
+        echo -n "LANG: ${group##*-} | "
+        echo "$line"
+    done
+}
+
+~/.pam_environment
+
+GTK_IM_MODULE DEFAULT=fcitx
+QT_IM_MODULE  DEFAULT=fcitx
+XMODIFIERS    DEFAULT=@im=fcitx
+SDL_IM_MODULE DEFAULT=fcitx
