@@ -6,8 +6,13 @@ import curses.textpad
 import locale
 
 # Устанавливаем локаль для поддержки Unicode
-locale.setlocale(locale.LC_ALL, '')
-locale.setlocale(locale.LC_CTYPE, ('ru_RU', 'UTF-8'))
+try:
+    locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
+except:
+    try:
+        locale.setlocale(locale.LC_ALL, 'C.UTF-8')
+    except:
+        pass
 
 def init_db():
     conn = sqlite3.connect('tasks.db')
@@ -67,33 +72,81 @@ class TaskManager:
         c.execute("SELECT id, name, created_date, description FROM tasks ORDER BY datetime(created_date) DESC")
         self.tasks = c.fetchall()
         
+    def get_unicode_input(self, y, x, max_len):
+        """Собирает строку с поддержкой Unicode символов"""
+        s = []
+        pos = 0
+        self.stdscr.move(y, x)
+        curses.curs_set(1)
+        curses.echo()
+
+        while True:
+            try:
+                ch = self.stdscr.get_wch()
+            except:
+                continue
+            
+            # Обработка обычных символов
+            if isinstance(ch, str) and ch.isprintable():
+                if len(s) < max_len:
+                    s.insert(pos, ch)
+                    pos += 1
+            
+            # Обработка специальных клавиш
+            elif ch == curses.KEY_BACKSPACE or ch == '\x7f':  # Backspace
+                if pos > 0:
+                    del s[pos-1]
+                    pos -= 1
+            elif ch == curses.KEY_DC:  # Delete
+                if pos < len(s):
+                    del s[pos]
+            elif ch == curses.KEY_LEFT:
+                if pos > 0:
+                    pos -= 1
+            elif ch == curses.KEY_RIGHT:
+                if pos < len(s):
+                    pos += 1
+            elif ch == '\n':  # Enter - завершение ввода
+                break
+            elif ch == '\x1b':  # ESC - отмена
+                s = []
+                break
+            
+            # Обновление отображения
+            self.stdscr.move(y, x)
+            self.stdscr.clrtoeol()
+            self.stdscr.addstr(y, x, ''.join(s))
+            self.stdscr.move(y, x + pos)
+        
+        curses.noecho()
+        curses.curs_set(0)
+        return ''.join(s).strip()
+
     def create_task(self):
         # Запрос ID
         self.show_message("Enter task ID (any characters): ")
-        curses.curs_set(1)
-        self.stdscr.move(curses.LINES - 1, len("Enter task ID (any characters): "))
-        curses.echo()
-        task_id = self.stdscr.getstr().decode('utf-8').strip()
-        curses.noecho()
+        task_id = self.get_unicode_input(
+            curses.LINES - 1, 
+            len("Enter task ID (any characters): "),
+            50
+        )
         
         if not task_id:
-            curses.curs_set(0)
             return
             
         # Проверка уникальности ID
         if any(task[0] == task_id for task in self.tasks):
             self.show_message(f"ID '{task_id}' already exists! Press any key.")
             self.stdscr.getch()
-            curses.curs_set(0)
             return
 
         # Запрос названия задачи
         self.show_message("Enter task name: ")
-        self.stdscr.move(curses.LINES - 1, len("Enter task name: "))
-        curses.echo()
-        name = self.stdscr.getstr().decode('utf-8').strip()
-        curses.noecho()
-        curses.curs_set(0)
+        name = self.get_unicode_input(
+            curses.LINES - 1, 
+            len("Enter task name: "),
+            70
+        )
         
         if name:
             created_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -114,12 +167,11 @@ class TaskManager:
             
         task_id = self.tasks[self.selected_idx][0]
         self.show_message(f"Update task (current: {self.tasks[self.selected_idx][1]}): ")
-        curses.curs_set(1)
-        self.stdscr.move(curses.LINES - 1, len(f"Update task (current: {self.tasks[self.selected_idx][1]}): "))
-        curses.echo()
-        new_name = self.stdscr.getstr().decode('utf-8').strip()
-        curses.noecho()
-        curses.curs_set(0)
+        new_name = self.get_unicode_input(
+            curses.LINES - 1,
+            len(f"Update task (current: {self.tasks[self.selected_idx][1]}): "),
+            70
+        )
         
         if new_name:
             c = self.conn.cursor()
@@ -255,12 +307,7 @@ class TaskManager:
         self.stdscr.addstr(2, 0, "Enter object name: ")
         self.stdscr.refresh()
         
-        curses.curs_set(1)
-        curses.echo()
-        self.stdscr.move(2, len("Enter object name: "))
-        obj_name = self.stdscr.getstr().decode('utf-8').strip()
-        curses.noecho()
-        curses.curs_set(0)
+        obj_name = self.get_unicode_input(2, len("Enter object name: "), 60)
         
         if not obj_name:
             self.show_message("Object name cannot be empty! Press any key.")
@@ -325,12 +372,11 @@ class TaskManager:
         self.stdscr.addstr(0, 0, f"Update object name (current: {name}): ")
         self.stdscr.refresh()
         
-        curses.curs_set(1)
-        curses.echo()
-        self.stdscr.move(0, len(f"Update object name (current: {name}): "))
-        new_name = self.stdscr.getstr().decode('utf-8').strip()
-        curses.noecho()
-        curses.curs_set(0)
+        new_name = self.get_unicode_input(
+            0, 
+            len(f"Update object name (current: {name}): "),
+            60
+        )
         
         if not new_name:
             new_name = name
